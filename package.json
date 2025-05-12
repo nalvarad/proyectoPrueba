@@ -1,0 +1,35 @@
+{
+  "name": "int-ms-giros-conciliacion",
+  "version": "0.1.0",
+  "bin": {
+    "int-ms-giros-conciliacion": "bin/int-ms-giros-conciliacion.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "test": "jest",
+    "cdk": "cdk"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.14",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "22.7.9",
+    "aws-cdk": "2.1012.0",
+    "esbuild": "^0.25.4",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.2.5",
+    "ts-node": "^10.9.2",
+    "typescript": "~5.6.3"
+  },
+  "dependencies": {
+    "@aws-cdk/aws-dynamodb": "^1.204.0",
+    "@aws-sdk/client-dynamodb": "^3.804.0",
+    "@aws-sdk/lib-dynamodb": "^3.804.0",
+    "aws-cdk-lib": "2.190.0",
+    "aws-sdk": "^2.1692.0",
+    "aws-xray-sdk": "^3.10.3",
+    "axios": "^1.9.0",
+    "constructs": "^10.0.0",
+    "js-yaml": "^4.1.0"
+  }
+}
