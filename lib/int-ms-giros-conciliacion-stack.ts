@@ -149,7 +149,7 @@ export class MsGirosConciliacionStack extends cdk.Stack {
       },
       role: role,
       tracing: lambda.Tracing.ACTIVE,
-      //logRetention: 1,
+      logRetention: 1,
       memorySize: 512,
       timeout: cdk.Duration.seconds(15),
       bundling: {
@@ -173,7 +173,7 @@ export class MsGirosConciliacionStack extends cdk.Stack {
       },
       role: role,
       tracing: lambda.Tracing.ACTIVE,
-      //logRetention: 1,
+      logRetention: 1,
       memorySize: 512,
       timeout: cdk.Duration.seconds(15),
       bundling: {
@@ -199,7 +199,7 @@ export class MsGirosConciliacionStack extends cdk.Stack {
       timeout: cdk.Duration.seconds(15),
       role: role,
       tracing: lambda.Tracing.ACTIVE,
-      //logRetention: 1,
+      logRetention: 1,
       bundling: {
         minify: true,
         sourceMap: true,
@@ -223,7 +223,7 @@ export class MsGirosConciliacionStack extends cdk.Stack {
       timeout: cdk.Duration.seconds(15),
       runtime: lambda.Runtime.NODEJS_16_X,
       handler: "consumeServices",
-      //logRetention: 1,
+      logRetention: 1,
       role: role,
       tracing: lambda.Tracing.ACTIVE,
       entry: path.join(__dirname, `/../src/functions/consumeServices.ts`),
