@@ -7,6 +7,7 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as tasks from 'aws-cdk-lib/aws-stepfunctions-tasks';
+import { Duration } from 'aws-cdk-lib';
 import * as path from 'path';
 
 export class MsGirosConciliacionStack extends cdk.Stack {
@@ -49,25 +50,25 @@ export class MsGirosConciliacionStack extends cdk.Stack {
       retention: logs.RetentionDays.ONE_WEEK,
       removalPolicy: cdk.RemovalPolicy.DESTROY
     });
-    
+
     new logs.LogGroup(this, 'registerAuditLogGroup', {
       logGroupName: `/aws/lambda/${this.stackName}-register-audit`,
       retention: logs.RetentionDays.ONE_WEEK,
       removalPolicy: cdk.RemovalPolicy.DESTROY
     });
-    
+
     new logs.LogGroup(this, 'consultarOnlinePaymentsLogGroup', {
       logGroupName: `/aws/lambda/${this.stackName}-consultar-online-payments`,
       retention: logs.RetentionDays.ONE_WEEK,
       removalPolicy: cdk.RemovalPolicy.DESTROY
     });
-    
+
     new logs.LogGroup(this, 'consumeServicesLogGroup', {
       logGroupName: `/aws/lambda/${this.stackName}-consumeServices`,
       retention: logs.RetentionDays.ONE_WEEK,
       removalPolicy: cdk.RemovalPolicy.DESTROY
     });
-    
+
     // ======== IAM Role para Lambda ========
     const role = new iam.Role(this, `MyRole`, {
       assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
@@ -187,29 +188,7 @@ export class MsGirosConciliacionStack extends cdk.Stack {
       // securityGroups: [securityGroupLambda],
     });
 
-    // ======== Lambda fnRegisterAuditoria ========
-    const fnRegisterPrueba = new NodejsFunction(this, "registerPruebaFn", {
-      functionName: `${this.stackName}-register-pruebafn`,
-      entry: path.join(__dirname, `/../src/functions/registerPrueba.function.ts`),
-      handler: 'handler',
-      runtime: lambda.Runtime.NODEJS_16_X,
-      environment: {
-        TABLA_DATA_NAME: config.TABLE_ONLINE_PAYMENTS,
-      },
-      role: role,
-      tracing: lambda.Tracing.ACTIVE,
-      //logRetention: 1.
-      memorySize: 512,
-      timeout: cdk.Duration.seconds(15),
-      bundling: {
-        minify: true,
-        sourceMap: true,
-        externalModules: ['aws-sdk'],
-      },
-      // vpc: vpcLambda,
-      // vpcSubnets: { subnets: subnetsLambda },
-      // securityGroups: [securityGroupLambda],
-    });
+
 
     // ======== Lambda para traer datos de dynamodb ========
     const fnConsultarData = new NodejsFunction(this, 'ConsultarTablaDataFn', {
@@ -287,92 +266,117 @@ export class MsGirosConciliacionStack extends cdk.Stack {
     discrepanciasTable.grantWriteData(fnRegisterDiscrepancias);
     auditoriaTable.grantWriteData(fnRegisterAuditoria);
     tableOnlinePayment.grantReadData(fnConsultarData);
-    tableOnlinePayment.grantReadData(fnRegisterPrueba);
-    
-
-    //Event Bus
 
 
+    // ======== Step Function: Flujo de conciliación ========
+    // 1. Consultar DynamoDB
+    const consultarDynamoTask = new tasks.LambdaInvoke(this, 'TaskConsultarDynamoDB', {
+      lambdaFunction: fnConsultarData,
+      outputPath: '$',               // ⚠️ dejamos todo el output (incluye Payload)
+      resultPath: '$.dynamoData'     // lo guardamos en dynamoData
+    });
+
+    // 2. Extraer solo el arreglo limpio de Payload
+    const prepararItemsMap = new sfn.Pass(this, 'ExtraerSoloArregloDeDynamo', {
+      parameters: {
+        'dynamoItems.$': '$.dynamoData.Payload' // 🔥 tomamos solo el arreglo de respuesta
+      }
+    });
+
+    // 3. Map para consultar Sybase por cada orden
+    const mapConsultarSybase = new sfn.Map(this, 'ConsultarCadaOrdenEnSybase', {
+      itemsPath: '$.dynamoItems',
+      resultPath: '$.sybaseData',
+      maxConcurrency: 3 // prueba con 5, puedes ajustar luego
+    });
 
 
-  // ======== Step Function: Flujo de conciliación ========
+    mapConsultarSybase.iterator(
+      new tasks.LambdaInvoke(this, 'TaskConsultarSybasePorOrderNo', {
+        lambdaFunction: fnConsumeServices,
+        payload: sfn.TaskInput.fromObject({
+          orderNo: sfn.JsonPath.stringAt('$.orderNo')
+        }),
+        outputPath: '$.Payload'
+      }).addRetry({
+          errors: [
+            'Lambda.ServiceException',
+            'Lambda.AWSLambdaException',
+            'Lambda.SdkClientException',
+            'Lambda.TooManyRequestsException'
+          ],
+          interval: Duration.seconds(2),
+          backoffRate: 2.0,
+          maxAttempts: 3
+        })
+    )
 
-// Tarea: consultar DynamoDB
-const consultarDynamoTask = new tasks.LambdaInvoke(this, 'TaskConsultarDynamoDB', {
-  lambdaFunction: fnConsultarData,
-  outputPath: '$.Payload',
-});
 
-// Tarea: consultar datos desde OnPremise (Spring Boot / OpenShift)
-const obtenerOntiverseTask = new tasks.LambdaInvoke(this, 'TaskConsultarOnPremise', {
-  lambdaFunction: fnConsumeServices,
-  outputPath: '$.Payload',
-});
+    // 4. Unir data para comparación
+    const prepararComparacion = new sfn.Pass(this, 'PrepararComparacion', {
+      parameters: {
+        "dynamoData.$": "$.dynamoItems",
+        "sybaseData.$": "$.sybaseData"
+      }
+    });
 
-// Ejecutar ambas consultas en paralelo
-const consultasParalelas = new sfn.Parallel(this, 'ParaleloConsultarFuentes', {
-  resultPath: '$.resultados'
-});
+    // 5. Comparar resultados
+    const compararDiscrepanciasTask = new tasks.LambdaInvoke(this, 'TaskCompararDiscrepancias', {
+      lambdaFunction: fncompararDiscrepancias,
+      inputPath: '$',
+      outputPath: '$.Payload'
+    });
 
-consultasParalelas
-  .branch(consultarDynamoTask)
-  .branch(obtenerOntiverseTask);
+    // 6. Notificar discrepancia
+    const notificarDiscrepancia = new sfn.Pass(this, 'PasoNotificarDiscrepancia');
 
-// Tarea: comparar la data de ambas fuentes
-const compararDiscrepanciasTask = new tasks.LambdaInvoke(this, 'TaskCompararDiscrepancias', {
-  lambdaFunction: fncompararDiscrepancias,
-  inputPath: '$.resultados',
-  outputPath: '$.Payload',
-});
+    // 7. Ejecutar pago
+    const ejecutarPago = new sfn.Pass(this, 'PasoEjecutarPago');
 
-// Paso: notificar discrepancia detectada
-const notificarDiscrepancia = new sfn.Pass(this, 'PasoNotificarDiscrepancia');
+    // 8. Ejecutar reverso
+    const ejecutarReverso = new sfn.Pass(this, 'PasoEjecutarReverso');
 
-// Paso: ejecutar el StepFunction de pago
-const ejecutarPago = new sfn.Pass(this, 'PasoEjecutarPago');
+    // 9. Notificar éxito
+    const notificarExitoTransaccion = new sfn.Pass(this, 'PasoNotificarExito');
 
-// Paso: ejecutar el StepFunction de reverso
-const ejecutarReverso = new sfn.Pass(this, 'PasoEjecutarReverso');
+    // 10. Flujo de pago
+    const flujoPago = ejecutarPago.next(notificarExitoTransaccion);
 
-// Paso: notificación final de éxito
-const notificarExitoTransaccion = new sfn.Pass(this, 'PasoNotificarExito');
+    // 11. Flujo de reverso
+    const flujoReverso = ejecutarReverso.next(notificarExitoTransaccion);
 
-// Flujo en caso de acción de pago
-const flujoPago = ejecutarPago.next(notificarExitoTransaccion);
+    // 12. Decisión: pago o reverso
+    const evaluarTipoAccion = new sfn.Choice(this, 'DecisionPagoOReverso')
+      .when(sfn.Condition.stringEquals('$.tipoAccion', 'pago'), flujoPago)
+      .when(sfn.Condition.stringEquals('$.tipoAccion', 'reverso'), flujoReverso);
 
-// Flujo en caso de acción de reverso
-const flujoReverso = ejecutarReverso.next(notificarExitoTransaccion);
+    // 13. Flujo si hubo discrepancia
+    const flujoConDiscrepancia = notificarDiscrepancia.next(evaluarTipoAccion);
 
-// Decisión entre pago o reverso
-const evaluarTipoAccion = new sfn.Choice(this, 'DecisionPagoOReverso')
-  .when(sfn.Condition.stringEquals('$.tipoAccion', 'pago'), flujoPago)
-  .when(sfn.Condition.stringEquals('$.tipoAccion', 'reverso'), flujoReverso);
+    // 14. Evaluar si hubo discrepancia
+    const evaluarResultado = new sfn.Choice(this, 'DecisionHayDiscrepancia')
+      .when(sfn.Condition.booleanEquals('$.huboDiscrepancia', true), flujoConDiscrepancia)
+      .otherwise(new sfn.Succeed(this, 'SinDiscrepanciasFinalizado'));
 
-// Flujo cuando hay discrepancia
-const flujoConDiscrepancia = notificarDiscrepancia.next(evaluarTipoAccion);
+    // 15. Encadenar todo el flujo
+    const flujoConciliacion = consultarDynamoTask
+      .next(prepararItemsMap)
+      .next(mapConsultarSybase)
+      .next(prepararComparacion)
+      .next(compararDiscrepanciasTask)
+      .next(evaluarResultado);
 
-// Evaluar si hubo discrepancia o no
-const evaluarResultado = new sfn.Choice(this, 'DecisionHayDiscrepancia')
-  .when(sfn.Condition.booleanEquals('$.huboDiscrepancia', true), flujoConDiscrepancia)
-  .otherwise(new sfn.Succeed(this, 'SinDiscrepanciasFinalizado'));
-
-// Encadenar todo el flujo
-const flujoConciliacion = consultasParalelas
-  .next(compararDiscrepanciasTask)
-  .next(evaluarResultado);
-
-// Crear la Step Function
-new sfn.StateMachine(this, 'StateMachineConciliacion', {
-  stateMachineName: `${this.stackName}-sfn-conciliacion`,
-  definition: flujoConciliacion,
-  logs: {
-    destination: logGroup,
-    level: sfn.LogLevel.ALL,
-  },
-  tracingEnabled: true,
-  role: roleStepFunction,
-});
-
+    // 16. Crear la Step Function
+    new sfn.StateMachine(this, 'StateMachineConciliacion', {
+      stateMachineName: `${this.stackName}-sfn-conciliacion`,
+      definition: flujoConciliacion,
+      logs: {
+        destination: logGroup,
+        level: sfn.LogLevel.ALL,
+      },
+      tracingEnabled: true,
+      role: roleStepFunction,
+    });
 
 
     /*
