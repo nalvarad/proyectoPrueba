@@ -15,49 +15,39 @@ function getRandomDelay() {
 export const compareDiscrepancies = async (event: any) => {
   await delay(getRandomDelay());
 
-  const comparacion = event || [];
-  const acciones: any[] = [];
+  const orderNo = event.orderNo;
+  const statusPayment = event.statusPayment?.toUpperCase();
+  const statusSybase = event.statusSybase?.toUpperCase();
 
-  for (const item of comparacion) {
-    const orderNo = item.orderNo;
-    const statusPayment = item.statusPayment?.toUpperCase();
-    const statusSybase = item.statusSybase?.toUpperCase();
+  console.log(`Comparando orderNo: ${orderNo}`);
+  console.log(`→ DynamoDB statusPayment: ${statusPayment ?? 'NO ENCONTRADO'}`);
+  console.log(`→ Sybase status: ${statusSybase ?? 'NO ENCONTRADO'}`);
 
-    console.log(`Comparando orderNo: ${orderNo}`);
-    console.log(`→ DynamoDB statusPayment: ${statusPayment ?? 'NO ENCONTRADO'}`);
-    console.log(`→ Sybase status: ${statusSybase ?? 'NO ENCONTRADO'}`);
+  // Registrar auditoría (siempre)
+  await registerAudit({
+    orderNo,
+    statusPayment: statusPayment ?? 'N/A',
+    estado: statusSybase ?? 'N/A',
+    mensaje: 'Auditoría de comparación',
+    corresponsalCode: event.corresponsal?.codigo ?? 'N/A',
+  });
 
-    //Registrar auditoría (siempre)
-    await registerAudit({
-      orderNo,
-      statusPayment: statusPayment ?? 'N/A',
-      estado: statusSybase ?? 'N/A',
-      mensaje: 'Auditoría de comparación',
-      corresponsalCode: item.corresponsal?.codigo ?? 'N/A',
-    });
-
-    //Lógica de discrepancias
-    if (!statusPayment && statusSybase === 'P') {
-      acciones.push({ tipo: 'pago', orderNo });
-      await registerDiscrepancie('pago', item, statusSybase);
-    } else if (statusSybase === 'P' && statusPayment === 'FAILED') {
-      acciones.push({ tipo: 'pago', orderNo });
-      await registerDiscrepancie('pago', item, statusSybase);
-    } else if (statusPayment === 'SUCCESS' && statusSybase !== 'P') {
-      acciones.push({ tipo: 'reverso', orderNo });
-      await registerDiscrepancie('reverso', item, statusSybase);
-    } else if (statusPayment === 'FAILED' && statusSybase === 'I') {
-      acciones.push({ tipo: 'reverso', orderNo });
-      await registerDiscrepancie('reverso', item, statusSybase);
-    } else {
-      console.log(`Sin acción requerida para orderNo: ${orderNo}`);
-    }
+  // Lógica de discrepancias
+  if (!statusPayment && statusSybase === 'P') {
+    await registerDiscrepancie('pago', event, statusSybase);
+  } else if (statusSybase === 'P' && statusPayment === 'FAILED') {
+    await registerDiscrepancie('pago', event, statusSybase);
+  } else if (statusPayment === 'SUCCESS' && statusSybase !== 'P') {
+    await registerDiscrepancie('reverso', event, statusSybase);
+  } else if (statusPayment === 'FAILED' && statusSybase === 'I') {
+    await registerDiscrepancie('reverso', event, statusSybase);
+  } else {
+    console.log(`Sin acción requerida para orderNo: ${orderNo}`);
   }
 
   return {
     statusCode: 200,
-    acciones,
-    huboDiscrepancia: acciones.length > 0,
-    tipoAccion: acciones.length > 0 ? acciones[0].tipo : null,
+    orderNo,
+    evaluado: true
   };
 };
