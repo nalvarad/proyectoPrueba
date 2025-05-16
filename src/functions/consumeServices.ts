@@ -1,11 +1,11 @@
-// NO uses captureHTTPsGlobal
 import * as AWSXRay from 'aws-xray-sdk-core';
 import * as https from 'https';
 import * as http from 'http';
 import axios, { AxiosRequestConfig } from "axios";
 
-const tracedHttps = AWSXRay.captureHTTPs(https);
-const tracedHttp = AWSXRay.captureHTTPs(http);
+// Captura automática de HTTPs/HTTP (solo necesario si haces peticiones manuales)
+AWSXRay.captureHTTPs(https);
+AWSXRay.captureHTTPs(http);
 
 const delay = (ms: number) => new Promise((res) => setTimeout(res, ms));
 
@@ -35,9 +35,9 @@ export async function consumeServices(event: any): Promise<any> {
     const finalUrl = `${baseUrl}?codeTransferencia=${encodeURIComponent(orderNo)}`;
     console.log(`[consumeServices] GET → ${finalUrl}`);
 
-    // Agent para conexiones HTTPS con certificados no confiables (solo para DEV)
-    const httpsAgent = new tracedHttps.Agent({
-      rejectUnauthorized: false,
+    // Usa el agente HTTPS sin X-Ray para evitar errores SSL
+    const httpsAgent = new https.Agent({
+      rejectUnauthorized: false, // Solo para desarrollo con Ngrok
       keepAlive: true,
     });
 
@@ -51,13 +51,18 @@ export async function consumeServices(event: any): Promise<any> {
       timeout: 10000
     };
 
+    // Subtrazado de la solicitud externa
+    const httpSubsegment = subsegment?.addNewSubsegment("ExternalCall: API REST");
+
     const response = await axios(request);
     const data = response.data;
+
+    httpSubsegment?.addMetadata("api_response", data);
+    httpSubsegment?.close();
 
     console.log(`[consumeServices] response:`, data);
 
     if (!data || Object.keys(data).length === 0) {
-      // ✅ No hay datos encontrados en Sybase
       return {
         statusCode: 404,
         body: {
@@ -66,7 +71,10 @@ export async function consumeServices(event: any): Promise<any> {
       };
     }
 
-    return data;
+    return {
+      statusCode: 200,
+      body: data
+    };
 
   } catch (err: any) {
     subsegment?.addError(err);

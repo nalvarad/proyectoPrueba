@@ -9,6 +9,7 @@ import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as tasks from 'aws-cdk-lib/aws-stepfunctions-tasks';
 import { Duration } from 'aws-cdk-lib';
 import * as path from 'path';
+import * as ec2 from "aws-cdk-lib/aws-ec2";
 
 export class MsGirosConciliacionStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -17,43 +18,39 @@ export class MsGirosConciliacionStack extends cdk.Stack {
     const config: any = props?.tags;
 
     // ======== Red: VPC, Subnets, SG ========
-    /*
-    const vpcLambda = ec2.Vpc.fromVpcAttributes(this, 'ImportedVPC', {
+
+    const vpcLambda = ec2.Vpc.fromVpcAttributes(this, "ExistingVpcLambda", {
       vpcId: config.VPC_ID,
-      availabilityZones: ['us-east-1a', 'us-east-1b', 'us-east-1c'],
+      availabilityZones: ["us-east-1a", "us-east-1b", "us-east-1c"],
     });
 
-    const subnetsLambda = [
+    // /**
+    //  * Subnets
+    //  */
+    const subnetIdsLambdas_ = [
       config.SUBNET_1a,
       config.SUBNET_1b,
       config.SUBNET_1c,
-    ].map((subnetId) =>
+    ];
+
+    const existingSubnet = subnetIdsLambdas_.map((subnetId) =>
       ec2.Subnet.fromSubnetId(this, subnetId, subnetId)
     );
 
-    const securityGroupLambda = ec2.SecurityGroup.fromSecurityGroupId(
+    // /**
+    //  * Security Groups
+    //  */
+    const securityGroupLambda_1 = ec2.SecurityGroup.fromSecurityGroupId(
       this,
-      'ImportedSG',
+      "securityGroupLambda_1",
       config.SECURITY_GROUP_DEFAULT
     );
-    */
+
 
     // ======== Log Group para Step Functions ========
     const logGroup = new logs.LogGroup(this, 'StepFunctionLogGroup', {
       logGroupName: `${this.stackName}-step-func-log-group`,
       retention: logs.RetentionDays.ONE_MONTH,
-      removalPolicy: cdk.RemovalPolicy.DESTROY
-    });
-
-    new logs.LogGroup(this, 'registerDiscrepanciesLogGroup', {
-      logGroupName: `/aws/lambda/${this.stackName}-register-discrepancies`,
-      retention: logs.RetentionDays.ONE_WEEK,
-      removalPolicy: cdk.RemovalPolicy.DESTROY
-    });
-
-    new logs.LogGroup(this, 'registerAuditLogGroup', {
-      logGroupName: `/aws/lambda/${this.stackName}-register-audit`,
-      retention: logs.RetentionDays.ONE_WEEK,
       removalPolicy: cdk.RemovalPolicy.DESTROY
     });
 
@@ -69,35 +66,148 @@ export class MsGirosConciliacionStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY
     });
 
+     new logs.LogGroup(this, 'compararDiscrepanciasLogGroup', {
+      logGroupName: `/aws/lambda/${this.stackName}-compare-discrepancies`,
+      retention: logs.RetentionDays.ONE_WEEK,
+      removalPolicy: cdk.RemovalPolicy.DESTROY
+    });
+
+
     // ======== IAM Role para Lambda ========
     const role = new iam.Role(this, `MyRole`, {
+      roleName: `${this.stackName}-role-stack`,
       assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
-      roleName: `${this.stackName}-lambda-role`,
-      managedPolicies: [
-        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole'),
-      ],
     });
+
 
     // ======== IAM Role para Step Functions ========
+
     const roleStepFunction = new iam.Role(this, `MyRoleSts`, {
+      roleName: `${this.stackName}-role-stateFunction`,
       assumedBy: new iam.ServicePrincipal('states.amazonaws.com'),
-      roleName: `${this.stackName}-stepfn-role`,
+      inlinePolicies: {
+        LogPolicy: new iam.PolicyDocument({
+          statements: [
+            new iam.PolicyStatement({
+              actions: [
+                'logs:CreateLogGroup',
+                'logs:CreateLogStream',
+                'logs:PutLogEvents'
+              ],
+              resources: [logGroup.logGroupArn],
+            }),
+          ],
+        }),
+      },
     });
 
-    roleStepFunction.addToPolicy(
-      new iam.PolicyStatement({
-        actions: [
-          'logs:CreateLogGroup',
-          'logs:CreateLogStream',
-          'logs:PutLogEvents',
-          'lambda:InvokeFunction',
-          'states:StartExecution',
-          'secretsmanager:GetSecretValue',
-        ],
-        resources: ['*'],
-      })
+    const lambdaPolicy = new iam.PolicyStatement(
+      {
+        effect: iam.Effect.ALLOW,
+        actions: ['states:StartExecution', 'states:DescribeExecution', 'states:GetExecutionHistory', 'events:PutEvents'],
+        resources: ['*']
+      }
     );
 
+    const eventsPolicy = new iam.PolicyStatement(
+      {
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'events:PutEvents',
+          'events:DescribeEventBus'
+        ],
+        resources: ['*']
+      }
+    );
+
+    const statePolicy = new iam.PolicyStatement(
+      {
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'states:StartExecution',
+          'states:SendTaskSuccess'
+        ],
+        resources: ['*']
+      }
+    );
+
+    const dynamdbPolicy = new iam.PolicyStatement(
+      {
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'dynamodb:DescribeLimits',
+          'dynamodb:GetItem',
+          'dynamodb:PutItem',
+          'dynamodb:DeleteItem',
+          'dynamodb:UpdateItem',
+          'dynamodb:Scan',
+          'dynamodb:Query'
+        ],
+        resources: ['*']
+      }
+    );
+
+    const stepFunctionPolicy = new iam.PolicyStatement(
+      {
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'sts:AssumeRole',
+          'dynamodb:GetItem',
+          'dynamodb:PutItem',
+          'dynamodb:DeleteItem',
+          'sqs:deletemessage',
+          'lambda:InvokeFunction',
+          'states:StartExecution',
+          'states:SendTaskSuccess',
+          'logs:CreateLogGroup',
+          'logs:CreateLogStream',
+          'logs:PutLogEvents'],
+        resources: ['*']
+      }
+    );
+
+    const cloudwatchToStepFunctionPolicy = new iam.PolicyStatement({
+      actions: ['states:StartExecution'],
+      resources: ["*"]
+    });
+
+    const cloudwatchPolicy = new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ["logs:*"],
+      resources: ["*"],
+    });
+
+    const networkingInterfaceLambda = new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ["ec2:*"],
+      resources: ["*"],
+    });
+
+    const passRoleStatement = new iam.PolicyStatement({
+      actions: ['iam:PassRole'],
+      resources: ['*'],
+    }
+    );
+
+    const snsPublishPolicy = new iam.PolicyStatement({
+      actions: ['sns:Publish'],
+      resources: [config.SNS_ARN]
+    });
+
+    role.addToPolicy(snsPublishPolicy);
+    role.addToPolicy(networkingInterfaceLambda);
+    role.addToPolicy(cloudwatchPolicy);
+    role.addToPolicy(eventsPolicy);
+    role.addToPolicy(statePolicy);
+    role.addToPolicy(dynamdbPolicy);
+    role.addToPolicy(cloudwatchToStepFunctionPolicy);
+    role.addToPolicy(lambdaPolicy);
+    role.addToPolicy(snsPublishPolicy)
+
+    roleStepFunction.addToPolicy(stepFunctionPolicy);
+    roleStepFunction.addToPolicy(passRoleStatement);
+
+    
     // ======== Event Bus ========
     const eventBusARN = config.EVENT_BUS_ARN;
 
@@ -140,55 +250,6 @@ export class MsGirosConciliacionStack extends cdk.Stack {
     // Tabla de giros pagados (OJO)
     const tableOnlinePayment = dynamodb.Table.fromTableName(this, "tablaOnlinePayments", config.TABLE_ONLINE_PAYMENTS);
 
-    // ======== Lambda RegisterDiscrepancias ========
-    const fnRegisterDiscrepancias = new NodejsFunction(this, "registerDiscrepanciesFn", {
-      functionName: `${this.stackName}-register-discrepancies`,
-      entry: path.join(__dirname, `/../src/functions/registerDiscrepancies.function.ts`),
-      handler: 'registerDiscrepancies',
-      runtime: lambda.Runtime.NODEJS_16_X,
-      environment: {
-        TABLA_DATA_NAME: discrepanciasTable.tableName,
-      },
-      role: role,
-      tracing: lambda.Tracing.ACTIVE,
-      //logRetention: 1.
-      memorySize: 512,
-      timeout: cdk.Duration.seconds(15),
-      bundling: {
-        minify: true,
-        sourceMap: true,
-        externalModules: ['aws-sdk'],
-      },
-      // vpc: vpcLambda,
-      // vpcSubnets: { subnets: subnetsLambda },
-      // securityGroups: [securityGroupLambda],
-    });
-
-    // ======== Lambda fnRegisterAuditoria ========
-    const fnRegisterAuditoria = new NodejsFunction(this, "registerAuditFn", {
-      functionName: `${this.stackName}-register-audit`,
-      entry: path.join(__dirname, `/../src/functions/registerAudit.function.ts`),
-      handler: 'registerAudit',
-      runtime: lambda.Runtime.NODEJS_16_X,
-      environment: {
-        TABLA_DATA_NAME: auditoriaTable.tableName,
-      },
-      role: role,
-      tracing: lambda.Tracing.ACTIVE,
-      //logRetention: 1.
-      memorySize: 512,
-      timeout: cdk.Duration.seconds(15),
-      bundling: {
-        minify: true,
-        sourceMap: true,
-        externalModules: ['aws-sdk'],
-      },
-      // vpc: vpcLambda,
-      // vpcSubnets: { subnets: subnetsLambda },
-      // securityGroups: [securityGroupLambda],
-    });
-
-
 
     // ======== Lambda para traer datos de dynamodb ========
     const fnConsultarData = new NodejsFunction(this, 'ConsultarTablaDataFn', {
@@ -203,15 +264,11 @@ export class MsGirosConciliacionStack extends cdk.Stack {
       timeout: cdk.Duration.seconds(15),
       role: role,
       tracing: lambda.Tracing.ACTIVE,
-      //logRetention: 1.
       bundling: {
         minify: true,
         sourceMap: true,
         externalModules: ['aws-sdk'],
-      },
-      //vpc: vpcLambda,
-      //vpcSubnets: { subnets: existingSubnet },
-      //securityGroups: [securityGroupLambda_1],
+      }
     });
 
     // ======== Lambda para traer datos de Onpremise ========
@@ -227,7 +284,6 @@ export class MsGirosConciliacionStack extends cdk.Stack {
       timeout: cdk.Duration.seconds(15),
       runtime: lambda.Runtime.NODEJS_16_X,
       handler: "consumeServices",
-      //logRetention: 1.
       role: role,
       tracing: lambda.Tracing.ACTIVE,
       entry: path.join(__dirname, `/../src/functions/consumeServices.ts`),
@@ -248,7 +304,10 @@ export class MsGirosConciliacionStack extends cdk.Stack {
       timeout: cdk.Duration.seconds(15),
       runtime: lambda.Runtime.NODEJS_16_X,
       handler: "compareDiscrepancies",
-      //logRetention: 1.
+      environment: {
+        DISCREPANCY_TABLE: discrepanciasTable.tableName,
+        AUDIT_TABLE: auditoriaTable.tableName,
+      },
       role: role,
       tracing: lambda.Tracing.ACTIVE,
       entry: path.join(__dirname, `/../src/functions/compareDiscrepancies.function.ts`),
@@ -256,15 +315,12 @@ export class MsGirosConciliacionStack extends cdk.Stack {
         minify: true,
         sourceMap: true,
         externalModules: ["aws-sdk"],
-      },
-      //vpc: vpcLambda,
-      //vpcSubnets: { subnets: existingSubnet },
-      //securityGroups: [securityGroupLambda_1]
+      }
     });
 
     // ======== Permiso de las tablas a las lambdas ========
-    discrepanciasTable.grantWriteData(fnRegisterDiscrepancias);
-    auditoriaTable.grantWriteData(fnRegisterAuditoria);
+    discrepanciasTable.grantWriteData(fncompararDiscrepancias);
+    auditoriaTable.grantWriteData(fncompararDiscrepancias);
     tableOnlinePayment.grantReadData(fnConsultarData);
 
 
@@ -272,14 +328,14 @@ export class MsGirosConciliacionStack extends cdk.Stack {
     // 1. Consultar DynamoDB
     const consultarDynamoTask = new tasks.LambdaInvoke(this, 'TaskConsultarDynamoDB', {
       lambdaFunction: fnConsultarData,
-      outputPath: '$',               // ⚠️ dejamos todo el output (incluye Payload)
-      resultPath: '$.dynamoData'     // lo guardamos en dynamoData
+      outputPath: '$',               //dejamos todo el output (incluye Payload)
+      resultPath: '$.dynamoData'     //lo guardamos en dynamoData
     });
 
     // 2. Extraer solo el arreglo limpio de Payload
     const prepararItemsMap = new sfn.Pass(this, 'ExtraerSoloArregloDeDynamo', {
       parameters: {
-        'dynamoItems.$': '$.dynamoData.Payload' // 🔥 tomamos solo el arreglo de respuesta
+        'dynamoItems.$': '$.dynamoData.Payload' //tomamos solo el arreglo de respuesta
       }
     });
 
@@ -299,16 +355,16 @@ export class MsGirosConciliacionStack extends cdk.Stack {
         }),
         outputPath: '$.Payload'
       }).addRetry({
-          errors: [
-            'Lambda.ServiceException',
-            'Lambda.AWSLambdaException',
-            'Lambda.SdkClientException',
-            'Lambda.TooManyRequestsException'
-          ],
-          interval: Duration.seconds(2),
-          backoffRate: 2.0,
-          maxAttempts: 3
-        })
+        errors: [
+          'Lambda.ServiceException',
+          'Lambda.AWSLambdaException',
+          'Lambda.SdkClientException',
+          'Lambda.TooManyRequestsException'
+        ],
+        interval: Duration.seconds(2),
+        backoffRate: 2.0,
+        maxAttempts: 3
+      })
     )
 
 

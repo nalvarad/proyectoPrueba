@@ -12,7 +12,8 @@ function getRandomDelay() {
 }
 
 export const getOnlinePayments = async () => {
-  await delay(getRandomDelay()); // espera aleatoria al inicio
+  await delay(getRandomDelay());
+
 
   try {
     const result = await dynamo.scan({
@@ -24,13 +25,18 @@ export const getOnlinePayments = async () => {
       let parsedOrden: any = {};
 
       try {
+        
+        if (typeof item.orden === 'string') {
+          console.warn(`orden viene como string en item #${index}`);
+        }
+
         if (item.orden) {
           parsedOrden = typeof item.orden === 'string'
             ? JSON.parse(item.orden)
             : item.orden;
         }
       } catch (err) {
-        console.error(`❌ Error parseando JSON de orden en item #${index}:`, err);
+        console.error(`Error parseando JSON de orden en item #${index}:`, err);
       }
 
       console.log(`===== Item #${index} =====`);
@@ -38,18 +44,17 @@ export const getOnlinePayments = async () => {
 
       return {
         orderNo: item.orderNo || null,
-        secuencia: parsedOrden?.secuencia?.S || parsedOrden?.orden?.M?.secuencial?.S || null,
+        secuencia: parsedOrden?.secuencia || parsedOrden?.orden?.secuencial || null,
         statusPayment: item.statusPayment || null,
-        paymentId: parsedOrden?.paymentId?.S || null,
-        fecha: parsedOrden?.fecha?.S || null,
-        monto: parsedOrden?.monto?.N ? parseFloat(parsedOrden.monto.N) : null,
+        paymentId: parsedOrden?.paymentId || null,
+        fecha: parsedOrden?.fecha || null,
+        monto: parsedOrden?.monto || null,
         corresponsal: {
-          nombre: parsedOrden?.orden?.M?.corresponsal?.M?.nombre?.S || null,
-          codigo: parsedOrden?.orden?.M?.corresponsal?.M?.codigo?.S || null
+          nombre: parsedOrden?.orden?.corresponsal?.nombre || null,
+          codigo: parsedOrden?.orden?.corresponsal?.codigo || null
         }
       };
     });
-
 
     return cleanItems;
 

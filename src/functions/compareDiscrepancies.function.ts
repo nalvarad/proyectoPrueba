@@ -1,4 +1,6 @@
 import { StepFunctions } from 'aws-sdk';
+import { registerDiscrepancie } from '../utils/discrepancies';
+import { registerAudit } from '../utils/audit';
 
 const step = new StepFunctions();
 
@@ -13,39 +15,40 @@ function getRandomDelay() {
 export const compareDiscrepancies = async (event: any) => {
   await delay(getRandomDelay());
 
-  //  Cambiado según nuevo input de Step Function
-  const dynamoData = event.dynamoData;
-  const sybaseData = event.sybaseData;
-
+  const comparacion = event || [];
   const acciones: any[] = [];
 
-  for (const itemDynamo of dynamoData) {
-    const { orderNo, statusPayment } = itemDynamo;
-
-    const matchingSybase = sybaseData.find(
-      (s: { transferencia: string }) => s.transferencia === orderNo
-    );
-
-    if (!matchingSybase) {
-      console.log(`No existe transferencia en Sybase para orderNo: ${orderNo}`);
-      continue;
-    }
-
-    const statusSybase = matchingSybase.status;
+  for (const item of comparacion) {
+    const orderNo = item.orderNo;
+    const statusPayment = item.statusPayment?.toUpperCase();
+    const statusSybase = item.statusSybase?.toUpperCase();
 
     console.log(`Comparando orderNo: ${orderNo}`);
-    console.log(`DynamoDB statusPayment: ${statusPayment}`);
-    console.log(`Sybase status: ${statusSybase}`);
+    console.log(`→ DynamoDB statusPayment: ${statusPayment ?? 'NO ENCONTRADO'}`);
+    console.log(`→ Sybase status: ${statusSybase ?? 'NO ENCONTRADO'}`);
 
-    if (statusSybase === 'P' && statusPayment === 'FAILED') {
-      console.log(` INSERT pago para orderNo: ${orderNo}`);
+    //Registrar auditoría (siempre)
+    await registerAudit({
+      orderNo,
+      statusPayment: statusPayment ?? 'N/A',
+      estado: statusSybase ?? 'N/A',
+      mensaje: 'Auditoría de comparación',
+      corresponsalCode: item.corresponsal?.codigo ?? 'N/A',
+    });
+
+    //Lógica de discrepancias
+    if (!statusPayment && statusSybase === 'P') {
       acciones.push({ tipo: 'pago', orderNo });
+      await registerDiscrepancie('pago', item, statusSybase);
+    } else if (statusSybase === 'P' && statusPayment === 'FAILED') {
+      acciones.push({ tipo: 'pago', orderNo });
+      await registerDiscrepancie('pago', item, statusSybase);
     } else if (statusPayment === 'SUCCESS' && statusSybase !== 'P') {
-      console.log(` INSERT reverso para orderNo: ${orderNo}`);
       acciones.push({ tipo: 'reverso', orderNo });
+      await registerDiscrepancie('reverso', item, statusSybase);
     } else if (statusPayment === 'FAILED' && statusSybase === 'I') {
-      console.log(` INSERT reverso por INGRESADO para orderNo: ${orderNo}`);
       acciones.push({ tipo: 'reverso', orderNo });
+      await registerDiscrepancie('reverso', item, statusSybase);
     } else {
       console.log(`Sin acción requerida para orderNo: ${orderNo}`);
     }
