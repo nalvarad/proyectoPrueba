@@ -328,8 +328,8 @@ export class MsGirosConciliacionStack extends cdk.Stack {
     // 1. Consultar DynamoDB
     const consultarDynamoTask = new tasks.LambdaInvoke(this, 'TaskConsultarDynamoDB', {
       lambdaFunction: fnConsultarData,
-      outputPath: '$',               // dejamos todo el output (incluye Payload)
-      resultPath: '$.dynamoData'     // lo guardamos en dynamoData
+      outputPath: '$',
+      resultPath: '$.dynamoData'
     });
 
     // 2. Extraer solo el arreglo limpio de Payload
@@ -339,12 +339,38 @@ export class MsGirosConciliacionStack extends cdk.Stack {
       }
     });
 
-    // 3. Map para consultar Sybase y fusionar con cada item de Dynamo
+    // 3. Map para consultar Sybase y fusionar
     const mapFusionarSybase = new sfn.Map(this, 'FusionarStatusSybasePorOrden', {
       itemsPath: '$.dynamoItems',
       resultPath: '$.comparacionList',
       maxConcurrency: 3
     });
+
+    // --- Subestados dentro del Map ---
+    const fusionarItemConStatus = new sfn.Pass(this, 'FusionarItemConStatus', {
+      parameters: {
+        'orderNo.$': '$.orderNo',
+        'statusPayment.$': '$.statusPayment',
+        'statusSybase.$': '$.sybaseResult.Payload.body.status',
+        'corresponsal.$': '$.corresponsal'
+      }
+    });
+
+    const fusionarItemSinStatus = new sfn.Pass(this, 'FusionarItemSinStatus', {
+      parameters: {
+        'orderNo.$': '$.orderNo',
+        'statusPayment.$': '$.statusPayment',
+        'statusSybase': 'NO_DATA',
+        'corresponsal.$': '$.corresponsal'
+      }
+    });
+
+    const decidirSiHayStatus = new sfn.Choice(this, 'ExisteStatusEnRespuestaSybase')
+      .when(
+        sfn.Condition.isPresent('$.sybaseResult.Payload.body.status'),
+        fusionarItemConStatus
+      )
+      .otherwise(fusionarItemSinStatus);
 
     mapFusionarSybase.iterator(
       new tasks.LambdaInvoke(this, 'ConsultarSybaseYFusionar', {
@@ -354,19 +380,8 @@ export class MsGirosConciliacionStack extends cdk.Stack {
         }),
         resultPath: '$.sybaseResult',
         outputPath: '$'
-      }).next(
-        new sfn.Pass(this, 'FusionarItem', {
-          parameters: {
-            'orderNo.$': '$.orderNo',
-            'statusPayment.$': '$.statusPayment',
-            'statusSybase.$': 'States.Format("{}", $.sybaseResult.Payload.body.status)', // usa States.Format para evitar falla si no existe
-            'corresponsal.$': '$.corresponsal'
-          }
-        })
-      )
+      }).next(decidirSiHayStatus)
     );
-
-
 
     // 4. Comparar resultados
     const compararDiscrepanciasTask = new tasks.LambdaInvoke(this, 'TaskCompararDiscrepancias', {
