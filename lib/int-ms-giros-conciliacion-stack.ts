@@ -328,110 +328,90 @@ export class MsGirosConciliacionStack extends cdk.Stack {
     // 1. Consultar DynamoDB
     const consultarDynamoTask = new tasks.LambdaInvoke(this, 'TaskConsultarDynamoDB', {
       lambdaFunction: fnConsultarData,
-      outputPath: '$',               //dejamos todo el output (incluye Payload)
-      resultPath: '$.dynamoData'     //lo guardamos en dynamoData
-    });
-   
-    //OJO
-    const limitarRegistros = new sfn.Pass(this, 'LimitarCantidadDeRegistros', {
-      parameters: {
-        'dynamoItems.$': 'States.ArraySlice($.dynamoItems, 0, 10)' // Toma solo los primeros 10 elementos
-      }
+      outputPath: '$',               // dejamos todo el output (incluye Payload)
+      resultPath: '$.dynamoData'     // lo guardamos en dynamoData
     });
 
     // 2. Extraer solo el arreglo limpio de Payload
     const prepararItemsMap = new sfn.Pass(this, 'ExtraerSoloArregloDeDynamo', {
       parameters: {
-        'dynamoItems.$': '$.dynamoData.Payload' //tomamos solo el arreglo de respuesta
+        'dynamoItems.$': '$.dynamoData.Payload'
       }
     });
 
-    // 3. Map para consultar Sybase por cada orden
-    const mapConsultarSybase = new sfn.Map(this, 'ConsultarCadaOrdenEnSybase', {
+    // 3. Map para consultar Sybase y fusionar con cada item de Dynamo
+    const mapFusionarSybase = new sfn.Map(this, 'FusionarStatusSybasePorOrden', {
       itemsPath: '$.dynamoItems',
-      resultPath: '$.sybaseData',
-      maxConcurrency: 3 // prueba con 5, puedes ajustar luego
+      resultPath: '$.comparacionList',
+      maxConcurrency: 3
     });
 
-
-    mapConsultarSybase.iterator(
-      new tasks.LambdaInvoke(this, 'TaskConsultarSybasePorOrderNo', {
+    mapFusionarSybase.iterator(
+      new tasks.LambdaInvoke(this, 'ConsultarSybaseYFusionar', {
         lambdaFunction: fnConsumeServices,
         payload: sfn.TaskInput.fromObject({
           orderNo: sfn.JsonPath.stringAt('$.orderNo')
         }),
-        outputPath: '$.Payload'
-      }).addRetry({
-        errors: [
-          'Lambda.ServiceException',
-          'Lambda.AWSLambdaException',
-          'Lambda.SdkClientException',
-          'Lambda.TooManyRequestsException'
-        ],
-        interval: Duration.seconds(2),
-        backoffRate: 2.0,
-        maxAttempts: 3
-      })
-    )
+        resultPath: '$.sybaseResult',
+        outputPath: '$'  // mantenemos todo el objeto original más sybaseResult
+      }).next(
+        new sfn.Pass(this, 'FusionarItem', {
+          parameters: {
+            'orderNo.$': '$.orderNo',
+            'statusPayment.$': '$.statusPayment',
+            'statusSybase.$': '$.sybaseResult.Payload.status',
+            'corresponsal.$': '$.corresponsal'
+          }
+        })
+      )
+    );
 
-
-    // 4. Unir data para comparación
-    const prepararComparacion = new sfn.Pass(this, 'PrepararComparacion', {
-      parameters: {
-        "dynamoData.$": "$.dynamoItems",
-        "sybaseData.$": "$.sybaseData"
-      }
-    });
-
-    // 5. Comparar resultados
+    // 4. Comparar resultados
     const compararDiscrepanciasTask = new tasks.LambdaInvoke(this, 'TaskCompararDiscrepancias', {
       lambdaFunction: fncompararDiscrepancias,
-      inputPath: '$',
+      inputPath: '$.comparacionList',
       outputPath: '$.Payload'
     });
 
-    // 6. Notificar discrepancia
+    // 5. Notificar discrepancia
     const notificarDiscrepancia = new sfn.Pass(this, 'PasoNotificarDiscrepancia');
 
-    // 7. Ejecutar pago
+    // 6. Ejecutar pago
     const ejecutarPago = new sfn.Pass(this, 'PasoEjecutarPago');
 
-    // 8. Ejecutar reverso
+    // 7. Ejecutar reverso
     const ejecutarReverso = new sfn.Pass(this, 'PasoEjecutarReverso');
 
-    // 9. Notificar éxito
+    // 8. Notificar éxito
     const notificarExitoTransaccion = new sfn.Pass(this, 'PasoNotificarExito');
 
-    // 10. Flujo de pago
+    // 9. Flujo de pago
     const flujoPago = ejecutarPago.next(notificarExitoTransaccion);
 
-    // 11. Flujo de reverso
+    // 10. Flujo de reverso
     const flujoReverso = ejecutarReverso.next(notificarExitoTransaccion);
 
-    // 12. Decisión: pago o reverso
+    // 11. Decisión: pago o reverso
     const evaluarTipoAccion = new sfn.Choice(this, 'DecisionPagoOReverso')
       .when(sfn.Condition.stringEquals('$.tipoAccion', 'pago'), flujoPago)
       .when(sfn.Condition.stringEquals('$.tipoAccion', 'reverso'), flujoReverso);
 
-    // 13. Flujo si hubo discrepancia
+    // 12. Flujo si hubo discrepancia
     const flujoConDiscrepancia = notificarDiscrepancia.next(evaluarTipoAccion);
 
-    // 14. Evaluar si hubo discrepancia
+    // 13. Evaluar si hubo discrepancia
     const evaluarResultado = new sfn.Choice(this, 'DecisionHayDiscrepancia')
       .when(sfn.Condition.booleanEquals('$.huboDiscrepancia', true), flujoConDiscrepancia)
       .otherwise(new sfn.Succeed(this, 'SinDiscrepanciasFinalizado'));
 
-    // 15. Encadenar todo el flujo
+    // 14. Encadenar todo el flujo
     const flujoConciliacion = consultarDynamoTask
       .next(prepararItemsMap)
-      .next(limitarRegistros) //OJO agregado para el limit de datos
-      .next(mapConsultarSybase)
-      .next(prepararComparacion)
+      .next(mapFusionarSybase)
       .next(compararDiscrepanciasTask)
       .next(evaluarResultado);
 
-
-    // 16. Crear la Step Function
+    // 15. Crear la Step Function
     new sfn.StateMachine(this, 'StateMachineConciliacion', {
       stateMachineName: `${this.stackName}-sfn-conciliacion`,
       definition: flujoConciliacion,

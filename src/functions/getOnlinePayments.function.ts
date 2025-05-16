@@ -70,7 +70,8 @@ export const getOnlinePayments = async () => {
 
     });
 
-    return cleanItems;
+    return cleanItems.slice(0, 10); //Limita a los primeros 10 registros
+
 
   } catch (error) {
     console.error("Error escaneando la tabla:", error);
