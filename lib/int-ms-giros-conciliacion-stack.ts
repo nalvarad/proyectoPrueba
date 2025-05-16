@@ -66,7 +66,7 @@ export class MsGirosConciliacionStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY
     });
 
-     new logs.LogGroup(this, 'compararDiscrepanciasLogGroup', {
+    new logs.LogGroup(this, 'compararDiscrepanciasLogGroup', {
       logGroupName: `/aws/lambda/${this.stackName}-compare-discrepancies`,
       retention: logs.RetentionDays.ONE_WEEK,
       removalPolicy: cdk.RemovalPolicy.DESTROY
@@ -207,7 +207,7 @@ export class MsGirosConciliacionStack extends cdk.Stack {
     roleStepFunction.addToPolicy(stepFunctionPolicy);
     roleStepFunction.addToPolicy(passRoleStatement);
 
-    
+
     // ======== Event Bus ========
     const eventBusARN = config.EVENT_BUS_ARN;
 
@@ -331,6 +331,13 @@ export class MsGirosConciliacionStack extends cdk.Stack {
       outputPath: '$',               //dejamos todo el output (incluye Payload)
       resultPath: '$.dynamoData'     //lo guardamos en dynamoData
     });
+   
+    //OJO
+    const limitarRegistros = new sfn.Pass(this, 'LimitarCantidadDeRegistros', {
+      parameters: {
+        'dynamoItems.$': 'States.ArraySlice($.dynamoItems, 0, 10)' // Toma solo los primeros 10 elementos
+      }
+    });
 
     // 2. Extraer solo el arreglo limpio de Payload
     const prepararItemsMap = new sfn.Pass(this, 'ExtraerSoloArregloDeDynamo', {
@@ -417,10 +424,12 @@ export class MsGirosConciliacionStack extends cdk.Stack {
     // 15. Encadenar todo el flujo
     const flujoConciliacion = consultarDynamoTask
       .next(prepararItemsMap)
+      .next(limitarRegistros) //OJO agregado para el limit de datos
       .next(mapConsultarSybase)
       .next(prepararComparacion)
       .next(compararDiscrepanciasTask)
       .next(evaluarResultado);
+
 
     // 16. Crear la Step Function
     new sfn.StateMachine(this, 'StateMachineConciliacion', {

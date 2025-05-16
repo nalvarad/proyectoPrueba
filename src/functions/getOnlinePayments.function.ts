@@ -25,7 +25,7 @@ export const getOnlinePayments = async () => {
       let parsedOrden: any = {};
 
       try {
-        
+        //OJO ESTO BORRAR DESPUES QUE ESTE VALIDADO
         if (typeof item.orden === 'string') {
           console.warn(`orden viene como string en item #${index}`);
         }
@@ -43,17 +43,31 @@ export const getOnlinePayments = async () => {
       console.log('Parsed orden:', JSON.stringify(parsedOrden, null, 2));
 
       return {
-        orderNo: item.orderNo || null,
-        secuencia: parsedOrden?.secuencia || parsedOrden?.orden?.secuencial || null,
+        orderNo: item.orderNo,
+        secuencia:
+          parsedOrden?.secuencia?.S ??
+          parsedOrden?.orden?.M?.secuencial?.S ??
+          parsedOrden?.secuencia ??
+          parsedOrden?.orden?.secuencial ??
+          null,
         statusPayment: item.statusPayment || null,
-        paymentId: parsedOrden?.paymentId || null,
-        fecha: parsedOrden?.fecha || null,
-        monto: parsedOrden?.monto || null,
+        paymentId: parsedOrden?.paymentId?.S ?? parsedOrden?.paymentId ?? null,
+        fecha: parsedOrden?.fecha?.S ?? parsedOrden?.fecha ?? null,
+        monto: parsedOrden?.monto?.N
+          ? parseFloat(parsedOrden.monto.N)
+          : parsedOrden?.monto ?? null,
         corresponsal: {
-          nombre: parsedOrden?.orden?.corresponsal?.nombre || null,
-          codigo: parsedOrden?.orden?.corresponsal?.codigo || null
-        }
+          nombre:
+            parsedOrden?.orden?.M?.corresponsal?.M?.nombre?.S ??
+            parsedOrden?.orden?.corresponsal?.nombre ??
+            null,
+          codigo:
+            parsedOrden?.orden?.M?.corresponsal?.M?.codigo?.S ??
+            parsedOrden?.orden?.corresponsal?.codigo ??
+            null,
+        },
       };
+
     });
 
     return cleanItems;
