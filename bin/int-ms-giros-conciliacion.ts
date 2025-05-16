@@ -5,7 +5,7 @@ import { MsGirosConciliacionStack } from '../lib/int-ms-giros-conciliacion-stack
 import { BuildConfig } from '../config/buildConfig';
 
 const app = new cdk.App();
-const nameStackApplication = `ms-giros-conciliacion`;
+const nameStackApplication = `int-ms-giros-conciliacion`;
 const Main = async (app: any) => {
 
   const stage = app.node.tryGetContext("stage") || "dev";

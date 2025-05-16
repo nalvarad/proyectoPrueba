@@ -324,7 +324,6 @@ export class MsGirosConciliacionStack extends cdk.Stack {
     tableOnlinePayment.grantReadData(fnConsultarData);
 
 
-    // ======== Step Function: Flujo de conciliación ========
     // 1. Consultar DynamoDB
     const consultarDynamoTask = new tasks.LambdaInvoke(this, 'TaskConsultarDynamoDB', {
       lambdaFunction: fnConsultarData,
@@ -332,103 +331,59 @@ export class MsGirosConciliacionStack extends cdk.Stack {
       resultPath: '$.dynamoData'
     });
 
-    // 2. Extraer solo el arreglo limpio de Payload
+    // 2. Extraer arreglo limpio de Payload
     const prepararItemsMap = new sfn.Pass(this, 'ExtraerSoloArregloDeDynamo', {
       parameters: {
         'dynamoItems.$': '$.dynamoData.Payload'
       }
     });
 
-    // 3. Map para consultar Sybase y fusionar
-    const mapFusionarSybase = new sfn.Map(this, 'FusionarStatusSybasePorOrden', {
+    // 3. Map → Para cada registro de Dynamo
+    const mapProcesarCadaItem = new sfn.Map(this, 'ProcesarCadaOrderNo', {
       itemsPath: '$.dynamoItems',
-      resultPath: '$.comparacionList',
+      resultPath: sfn.JsonPath.DISCARD, // No necesitamos guardar toda la salida
       maxConcurrency: 3
     });
 
-    // --- Subestados dentro del Map ---
-    const fusionarItemConStatus = new sfn.Pass(this, 'FusionarItemConStatus', {
-      parameters: {
-        'orderNo.$': '$.orderNo',
-        'statusPayment.$': '$.statusPayment',
-        'statusSybase.$': '$.sybaseResult.Payload.body.status',
-        'corresponsal.$': '$.corresponsal'
-      }
+    // 3.1 Lambda 2: consultar Sybase por orderNo
+    const consultarSybase = new tasks.LambdaInvoke(this, 'ConsultarStatusSybase', {
+      lambdaFunction: fnConsumeServices,
+      payload: sfn.TaskInput.fromObject({
+        orderNo: sfn.JsonPath.stringAt('$.orderNo')
+      }),
+      resultPath: '$.sybaseResult',
+      outputPath: '$' // Conservamos el item original + resultado
     });
 
-    const fusionarItemSinStatus = new sfn.Pass(this, 'FusionarItemSinStatus', {
-      parameters: {
-        'orderNo.$': '$.orderNo',
-        'statusPayment.$': '$.statusPayment',
-        'statusSybase': 'NO_DATA',
-        'corresponsal.$': '$.corresponsal'
-      }
-    });
-
-    const decidirSiHayStatus = new sfn.Choice(this, 'ExisteStatusEnRespuestaSybase')
+    // 3.2 Decision: ¿Sybase respondió con status?
+    const existeStatus = new sfn.Choice(this, 'ExisteStatusDeSybase')
       .when(
         sfn.Condition.isPresent('$.sybaseResult.Payload.body.status'),
-        fusionarItemConStatus
+        new tasks.LambdaInvoke(this, 'CompararYRegistrarDiscrepancia', {
+          lambdaFunction: fncompararDiscrepancias,
+          payload: sfn.TaskInput.fromObject({
+            orderNo: sfn.JsonPath.stringAt('$.orderNo'),
+            statusPayment: sfn.JsonPath.stringAt('$.statusPayment'),
+            statusSybase: sfn.JsonPath.stringAt('$.sybaseResult.Payload.body.status'),
+            corresponsal: sfn.JsonPath.stringAt('$.corresponsal')
+          }),
+          resultPath: sfn.JsonPath.DISCARD // No necesitas guardar esta salida
+        })
       )
-      .otherwise(fusionarItemSinStatus);
+      .otherwise(new sfn.Pass(this, 'OmitirPorNoTenerStatus'));
 
-    mapFusionarSybase.iterator(
-      new tasks.LambdaInvoke(this, 'ConsultarSybaseYFusionar', {
-        lambdaFunction: fnConsumeServices,
-        payload: sfn.TaskInput.fromObject({
-          orderNo: sfn.JsonPath.stringAt('$.orderNo')
-        }),
-        resultPath: '$.sybaseResult',
-        outputPath: '$'
-      }).next(decidirSiHayStatus)
+    // Encadenar el flujo del Map
+    mapProcesarCadaItem.iterator(
+      consultarSybase.next(existeStatus)
     );
 
-    // 4. Comparar resultados
-    const compararDiscrepanciasTask = new tasks.LambdaInvoke(this, 'TaskCompararDiscrepancias', {
-      lambdaFunction: fncompararDiscrepancias,
-      inputPath: '$.comparacionList',
-      outputPath: '$.Payload'
-    });
-
-    // 5. Notificar discrepancia
-    const notificarDiscrepancia = new sfn.Pass(this, 'PasoNotificarDiscrepancia');
-
-    // 6. Ejecutar pago
-    const ejecutarPago = new sfn.Pass(this, 'PasoEjecutarPago');
-
-    // 7. Ejecutar reverso
-    const ejecutarReverso = new sfn.Pass(this, 'PasoEjecutarReverso');
-
-    // 8. Notificar éxito
-    const notificarExitoTransaccion = new sfn.Pass(this, 'PasoNotificarExito');
-
-    // 9. Flujo de pago
-    const flujoPago = ejecutarPago.next(notificarExitoTransaccion);
-
-    // 10. Flujo de reverso
-    const flujoReverso = ejecutarReverso.next(notificarExitoTransaccion);
-
-    // 11. Decisión: pago o reverso
-    const evaluarTipoAccion = new sfn.Choice(this, 'DecisionPagoOReverso')
-      .when(sfn.Condition.stringEquals('$.tipoAccion', 'pago'), flujoPago)
-      .when(sfn.Condition.stringEquals('$.tipoAccion', 'reverso'), flujoReverso);
-
-    // 12. Flujo si hubo discrepancia
-    const flujoConDiscrepancia = notificarDiscrepancia.next(evaluarTipoAccion);
-
-    // 13. Evaluar si hubo discrepancia
-    const evaluarResultado = new sfn.Choice(this, 'DecisionHayDiscrepancia')
-      .when(sfn.Condition.booleanEquals('$.huboDiscrepancia', true), flujoConDiscrepancia)
-      .otherwise(new sfn.Succeed(this, 'SinDiscrepanciasFinalizado'));
-
-    // 14. Encadenar todo el flujo
+    // 4. Finalizar flujo
     const flujoConciliacion = consultarDynamoTask
       .next(prepararItemsMap)
-      .next(mapFusionarSybase)
-      .next(compararDiscrepanciasTask)
-      .next(evaluarResultado);
+      .next(mapProcesarCadaItem)
+      .next(new sfn.Succeed(this, 'ConciliacionFinalizada'));
 
-    // 15. Crear la Step Function
+    // 5. Crear la Step Function
     new sfn.StateMachine(this, 'StateMachineConciliacion', {
       stateMachineName: `${this.stackName}-sfn-conciliacion`,
       definition: flujoConciliacion,

@@ -53,7 +53,7 @@ export class BuildConfig {
                 SECRET_MANAGER_TRANSNETWORK_CRED: this.ensureString(unparsedEnv, "SECRET_MANAGER_TRANSNETWORK_CRED"),
                 TIME_CACHE_RECORD: this.ensureNumber(unparsedEnv, "TIME_CACHE_RECORD"),
                 NOTIFICATION_TOPIC_ARN: this.ensureString(unparsedEnv, "NOTIFICATION_TOPIC_ARN"),
-                URL_API_PRUEBA: this.ensureString(unparsedEnv, "URL_API_PRUEBA")
+                URL_API_PRUEBA: this.ensureString(unparsedEnv, "URL_API_PRUEBA"),
 
             }
             console.log(`### buildConfig OK ${buildConfigResponse}`);
