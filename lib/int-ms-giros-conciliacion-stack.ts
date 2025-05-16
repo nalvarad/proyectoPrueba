@@ -353,18 +353,20 @@ export class MsGirosConciliacionStack extends cdk.Stack {
           orderNo: sfn.JsonPath.stringAt('$.orderNo')
         }),
         resultPath: '$.sybaseResult',
-        outputPath: '$'  // mantenemos todo el objeto original más sybaseResult
+        outputPath: '$'
       }).next(
         new sfn.Pass(this, 'FusionarItem', {
           parameters: {
             'orderNo.$': '$.orderNo',
             'statusPayment.$': '$.statusPayment',
-            'statusSybase.$': '$.sybaseResult.Payload.status',
+            'statusSybase.$': 'States.Format("{}", $.sybaseResult.Payload.body.status)', // usa States.Format para evitar falla si no existe
             'corresponsal.$': '$.corresponsal'
           }
         })
       )
     );
+
+
 
     // 4. Comparar resultados
     const compararDiscrepanciasTask = new tasks.LambdaInvoke(this, 'TaskCompararDiscrepancias', {
