@@ -3,6 +3,8 @@ import { v4 as uuidv4 } from 'uuid';
 
 const docClient = new DynamoDB.DocumentClient();
 const tableAudit = process.env.AUDIT_TABLE || '';
+const timeCache = Number(process.env.TIME_EXPIRATION_CACHE);
+
 export async function registerAudit(input: {
   orderNo: string;
   statusPayment: string;
@@ -11,7 +13,7 @@ export async function registerAudit(input: {
   corresponsalCode?: string;
 }) {
   const now = new Date().toISOString();
-  const expirationDateClean = Math.floor(Date.now() / 1000) + 60 * 60 * 24; //OJO CAMBIAR
+  const expirationDateClean = Math.floor(Date.now() / 1000) + 60 * 60 * timeCache; //OJO CAMBIAR
 
   const item = {
     id: uuidv4(),

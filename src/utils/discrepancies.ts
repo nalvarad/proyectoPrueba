@@ -3,13 +3,14 @@ import { v4 as uuidv4 } from 'uuid';
 
 const docClient = new DynamoDB.DocumentClient();
 const tableDiscrepancias = process.env.DISCREPANCY_TABLE || '';
+const timeCache = Number(process.env.TIME_EXPIRATION_CACHE);
 
 export async function registerDiscrepancie(
   tipo: 'pago' | 'reverso',
   item: any,
   estado: string
 ) {
-  const expirationDateClean = Math.floor(Date.now() / 1000) + 60 * 60 * 24; //OJO CAMBIAR
+  const expirationDateClean = Math.floor(Date.now() / 1000) + 60 * 60 * timeCache;
 
   const registro = {
     id: uuidv4(),

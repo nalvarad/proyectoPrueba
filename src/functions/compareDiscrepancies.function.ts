@@ -3,6 +3,9 @@ import { registerDiscrepancie } from '../utils/discrepancies';
 import { registerAudit } from '../utils/audit';
 
 const step = new StepFunctions();
+const TIME_REINTENTOS = Number(process.env.TIME_REINTENTOS) || 15; //Tiempo de reintentos en min 
+const NUM_REINTENTOS = Number(process.env.NUM_REINTENTOS) || 2; //Numero de reintentos
+
 
 const delay = (ms: number) => new Promise((res) => setTimeout(res, ms));
 
@@ -11,7 +14,6 @@ function getRandomDelay() {
   const factor = Math.pow(2, Math.floor(Math.random() * 5));
   return base * factor + Math.floor(Math.random() * base);
 }
-
 export const compareDiscrepancies = async (event: any) => {
   await delay(getRandomDelay());
 
@@ -20,29 +22,39 @@ export const compareDiscrepancies = async (event: any) => {
   const statusSybase = event.statusSybase?.toUpperCase();
 
   console.log(`Comparando orderNo: ${orderNo}`);
-  console.log(`→ DynamoDB statusPayment: ${statusPayment ?? 'NO ENCONTRADO'}`);
-  console.log(`→ Sybase status: ${statusSybase ?? 'NO ENCONTRADO'}`);
+  console.log(`-> DynamoDB statusPayment: ${statusPayment ?? 'NO ENCONTRADO'}`);
+  console.log(`-> Sybase status: ${statusSybase ?? 'NO ENCONTRADO'}`);
 
-  // Registrar auditoría (siempre)
+  //Solo registramos auditoría si viene statusSybase definido
+  if (!statusSybase) {
+    console.log(`No se registrará auditoría para ${orderNo} porque Sybase no retornó status.`);
+    return {
+      statusCode: 200,
+      orderNo,
+      evaluado: false
+    };
+  }
+
+  // Registrar auditoría (solo si hay status válido)
   await registerAudit({
     orderNo,
-    statusPayment: statusPayment ?? 'N/A',
-    estado: statusSybase ?? 'N/A',
-    mensaje: 'Auditoría de comparación',
-    corresponsalCode: event.corresponsal?.codigo ?? 'N/A',
+    statusPayment: statusPayment,
+    estado: statusSybase,
+    mensaje: 'Auditoría de comparacion',
+    corresponsalCode: event.corresponsal?.codigo,
   });
 
-  // Lógica de discrepancias
-  if (!statusPayment && statusSybase === 'P') {
-    await registerDiscrepancie('pago', event, statusSybase);
-  } else if (statusSybase === 'P' && statusPayment === 'FAILED') {
+  // Caso 1: No hay registro o fallo en Dynamo, pero Sybase dice que sí pago
+  if ((!statusPayment || statusPayment === 'FAILED') && statusSybase === 'P') {
     await registerDiscrepancie('pago', event, statusSybase);
   } else if (statusPayment === 'SUCCESS' && statusSybase !== 'P') {
     await registerDiscrepancie('reverso', event, statusSybase);
   } else if (statusPayment === 'FAILED' && statusSybase === 'I') {
     await registerDiscrepancie('reverso', event, statusSybase);
+  } else if (statusSybase === 'A') {
+    console.log(`Estado ANULADO para orderNo: ${orderNo}, no se realiza accion.`);
   } else {
-    console.log(`Sin acción requerida para orderNo: ${orderNo}`);
+    console.log(`Sin acción requerida para orderNo: ${orderNo} con statusSybase: ${statusSybase} y statusPayment: ${statusPayment}`);
   }
 
   return {

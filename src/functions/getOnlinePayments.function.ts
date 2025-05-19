@@ -6,14 +6,13 @@ const TABLE_NAME = process.env.TABLA_DATA_NAME || '';
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function getRandomDelay() {
-  const base = 100; // milisegundos
-  const factor = Math.pow(2, Math.floor(Math.random() * 5)); // 1, 2, 4, 8, 16
-  return base * factor + Math.floor(Math.random() * base); // backoff + jitter
+  const base = 100;
+  const factor = Math.pow(2, Math.floor(Math.random() * 5));
+  return base * factor + Math.floor(Math.random() * base);
 }
 
 export const getOnlinePayments = async () => {
   await delay(getRandomDelay());
-
 
   try {
     const result = await dynamo.scan({
@@ -25,7 +24,6 @@ export const getOnlinePayments = async () => {
       let parsedOrden: any = {};
 
       try {
-        //OJO ESTO BORRAR DESPUES QUE ESTE VALIDADO
         if (typeof item.orden === 'string') {
           console.warn(`orden viene como string en item #${index}`);
         }
@@ -39,8 +37,8 @@ export const getOnlinePayments = async () => {
         console.error(`Error parseando JSON de orden en item #${index}:`, err);
       }
 
-      console.log(`===== Item #${index} =====`);
-      console.log('Parsed orden:', JSON.stringify(parsedOrden, null, 2));
+      const fechaParsed = parsedOrden?.fecha?.S ?? parsedOrden?.fecha ?? null;
+      const fechaValida = fechaParsed && !isNaN(new Date(fechaParsed).getTime());
 
       return {
         orderNo: item.orderNo,
@@ -52,7 +50,7 @@ export const getOnlinePayments = async () => {
           null,
         statusPayment: item.statusPayment || null,
         paymentId: parsedOrden?.paymentId?.S ?? parsedOrden?.paymentId ?? null,
-        fecha: parsedOrden?.fecha?.S ?? parsedOrden?.fecha ?? null,
+        fecha: fechaValida ? fechaParsed : null,
         monto: parsedOrden?.monto?.N
           ? parseFloat(parsedOrden.monto.N)
           : parsedOrden?.monto ?? null,
@@ -67,11 +65,31 @@ export const getOnlinePayments = async () => {
             null,
         },
       };
-
     });
 
-    return cleanItems.slice(0, 10); //Limita a los primeros 10 registros
+    // Crear resultado respetando el orden original, pero solo con la fecha más reciente por orderNo
+    const seenOrders: { [orderNo: string]: number } = {};
+    const finalList: any[] = [];
 
+    cleanItems.forEach((item) => {
+      if (!item.fecha) return; // saltar si no tiene fecha válida
+
+      const index = seenOrders[item.orderNo];
+
+      if (index === undefined) {
+        // Primera vez que vemos este orderNo
+        seenOrders[item.orderNo] = finalList.length;
+        finalList.push(item);
+      } else {
+        // Ya fue agregado antes -> comparar fechas
+        const existing = finalList[index];
+        if (new Date(item.fecha) > new Date(existing.fecha)) {
+          finalList[index] = item;
+        }
+      }
+    });
+
+    return finalList.slice(0,10);  // Retornar solo los 5 primeros
 
   } catch (error) {
     console.error("Error escaneando la tabla:", error);

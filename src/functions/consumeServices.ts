@@ -66,7 +66,8 @@ export async function consumeServices(event: any): Promise<any> {
       return {
         statusCode: 404,
         body: {
-          message: `No se encontró información para orderNo: ${orderNo}`
+          message: `No se encontró información para orderNo: ${orderNo}`,
+          status: null
         }
       };
     }
@@ -83,8 +84,8 @@ export async function consumeServices(event: any): Promise<any> {
     return {
       statusCode: err.response?.status || 500,
       body: {
-        message: "Error al consumir el servicio",
-        details: err.message
+        status: null,
+        message: err.message
       }
     };
   } finally {

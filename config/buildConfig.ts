@@ -54,6 +54,9 @@ export class BuildConfig {
                 TIME_CACHE_RECORD: this.ensureNumber(unparsedEnv, "TIME_CACHE_RECORD"),
                 NOTIFICATION_TOPIC_ARN: this.ensureString(unparsedEnv, "NOTIFICATION_TOPIC_ARN"),
                 URL_API_PRUEBA: this.ensureString(unparsedEnv, "URL_API_PRUEBA"),
+                TIME_EXPIRATION_CACHE: this.ensureString(unparsedEnv, "TIME_EXPIRATION_CACHE"),
+                TIME_REINTENTOS: this.ensureString(unparsedEnv, "TIME_REINTENTOS"),
+                NUM_REINTENTOS: this.ensureString(unparsedEnv, "NUM_REINTENTOS"),
 
             }
             console.log(`### buildConfig OK ${buildConfigResponse}`);

@@ -7,7 +7,6 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as tasks from 'aws-cdk-lib/aws-stepfunctions-tasks';
-import { Duration } from 'aws-cdk-lib';
 import * as path from 'path';
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 
@@ -307,6 +306,10 @@ export class MsGirosConciliacionStack extends cdk.Stack {
       environment: {
         DISCREPANCY_TABLE: discrepanciasTable.tableName,
         AUDIT_TABLE: auditoriaTable.tableName,
+        TIME_EXPIRATION_CACHE: config.TIME_EXPIRATION_CACHE, // En Horas
+        TIME_REINTENTOS: config.TIME_REINTENTOS, // En Minutos
+        NUM_REINTENTOS: config.NUM_REINTENTOS //Numero de reintentos
+
       },
       role: role,
       tracing: lambda.Tracing.ACTIVE,
@@ -323,7 +326,7 @@ export class MsGirosConciliacionStack extends cdk.Stack {
     auditoriaTable.grantWriteData(fncompararDiscrepancias);
     tableOnlinePayment.grantReadData(fnConsultarData);
 
-
+    // ====== Step Functions ========
     // 1. Consultar DynamoDB
     const consultarDynamoTask = new tasks.LambdaInvoke(this, 'TaskConsultarDynamoDB', {
       lambdaFunction: fnConsultarData,
@@ -341,7 +344,7 @@ export class MsGirosConciliacionStack extends cdk.Stack {
     // 3. Map → Para cada registro de Dynamo
     const mapProcesarCadaItem = new sfn.Map(this, 'ProcesarCadaOrderNo', {
       itemsPath: '$.dynamoItems',
-      resultPath: sfn.JsonPath.DISCARD, // No necesitamos guardar toda la salida
+      resultPath: sfn.JsonPath.DISCARD,
       maxConcurrency: 3
     });
 
@@ -352,38 +355,33 @@ export class MsGirosConciliacionStack extends cdk.Stack {
         orderNo: sfn.JsonPath.stringAt('$.orderNo')
       }),
       resultPath: '$.sybaseResult',
-      outputPath: '$' // Conservamos el item original + resultado
+      outputPath: '$'
     });
 
-    // 3.2 Decision: ¿Sybase respondió con status?
-    const existeStatus = new sfn.Choice(this, 'ExisteStatusDeSybase')
-      .when(
-        sfn.Condition.isPresent('$.sybaseResult.Payload.body.status'),
-        new tasks.LambdaInvoke(this, 'CompararYRegistrarDiscrepancia', {
-          lambdaFunction: fncompararDiscrepancias,
-          payload: sfn.TaskInput.fromObject({
-            orderNo: sfn.JsonPath.stringAt('$.orderNo'),
-            statusPayment: sfn.JsonPath.stringAt('$.statusPayment'),
-            statusSybase: sfn.JsonPath.stringAt('$.sybaseResult.Payload.body.status'),
-            corresponsal: sfn.JsonPath.stringAt('$.corresponsal')
-          }),
-          resultPath: sfn.JsonPath.DISCARD // No necesitas guardar esta salida
-        })
-      )
-      .otherwise(new sfn.Pass(this, 'OmitirPorNoTenerStatus'));
+    // 3.2 Lambda 3: comparar y registrar discrepancias (sin evaluar en Step)
+    const compararYRegistrar = new tasks.LambdaInvoke(this, 'CompararYRegistrarDiscrepancia', {
+      lambdaFunction: fncompararDiscrepancias,
+      payload: sfn.TaskInput.fromObject({
+        orderNo: sfn.JsonPath.stringAt('$.orderNo'),
+        statusPayment: sfn.JsonPath.stringAt('$.statusPayment'),
+        statusSybase: sfn.JsonPath.stringAt('$.sybaseResult.Payload.body.status'),
+        corresponsal: sfn.JsonPath.stringAt('$.corresponsal')
+      }),
+      resultPath: sfn.JsonPath.DISCARD
+    });
 
-    // Encadenar el flujo del Map
+    // 4. Encadenar subflujo del map
     mapProcesarCadaItem.iterator(
-      consultarSybase.next(existeStatus)
+      consultarSybase.next(compararYRegistrar)
     );
 
-    // 4. Finalizar flujo
+    // 5. Definir flujo completo
     const flujoConciliacion = consultarDynamoTask
       .next(prepararItemsMap)
       .next(mapProcesarCadaItem)
-      .next(new sfn.Succeed(this, 'ConciliacionFinalizada'));
+      .next(new sfn.Succeed(this, 'Fin'));
 
-    // 5. Crear la Step Function
+    // 6. Crear Step Function
     new sfn.StateMachine(this, 'StateMachineConciliacion', {
       stateMachineName: `${this.stackName}-sfn-conciliacion`,
       definition: flujoConciliacion,
