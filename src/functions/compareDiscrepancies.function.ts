@@ -31,27 +31,34 @@ export const compareDiscrepancies = async (event: any) => {
     };
   }
 
-  // Registrar auditoría (solo si hay status válido)
-  await registerAudit({
-    orderNo,
-    statusPayment: statusPayment,
-    estado: statusSybase,
-    mensaje: 'Auditoría de comparacion',
-    corresponsalCode: event.corresponsal?.codigo,
-  });
+  // Construir mensaje personalizado para auditoría
+  let mensajeAudit = '';
 
-  // Caso 1: No hay registro o fallo en Dynamo, pero Sybase dice que sí pago
   if ((!statusPayment || statusPayment === 'FAILED') && statusSybase === 'P') {
+    mensajeAudit = 'Se detectó posible PAGO: Sybase confirmó pero Dynamo no refleja';
     await registerDiscrepancie('pago', event, statusSybase);
   } else if (statusPayment === 'SUCCESS' && statusSybase !== 'P') {
+    mensajeAudit = 'Se detectó posible REVERSO: Dynamo SUCCESS pero Sybase no refleja';
     await registerDiscrepancie('reverso', event, statusSybase);
   } else if (statusPayment === 'FAILED' && statusSybase === 'I') {
+    mensajeAudit = 'Se detectó posible REVERSO: Sybase esta como Ingresado';
     await registerDiscrepancie('reverso', event, statusSybase);
   } else if (statusSybase === 'A') {
-    console.log(`Estado ANULADO para orderNo: ${orderNo}, no se realiza accion.`);
+    mensajeAudit = 'Estado ANULADO detectado. No se toma acción.';
+    console.log(mensajeAudit);
   } else {
-    console.log(`Sin acción requerida para orderNo: ${orderNo} con statusSybase: ${statusSybase} y statusPayment: ${statusPayment}`);
+    mensajeAudit = 'Comparación sin discrepancias relevantes';
+    console.log(mensajeAudit);
   }
+
+  // Registrar auditoría solo si hay status válido
+  await registerAudit({
+    orderNo,
+    statusPayment,
+    estado: statusSybase,
+    mensaje: mensajeAudit,
+    corresponsalCode: event.corresponsal?.codigo,
+  });
 
   return {
     statusCode: 200,

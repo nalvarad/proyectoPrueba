@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 
 const docClient = new DynamoDB.DocumentClient();
 const tableDiscrepancias = process.env.DISCREPANCY_TABLE || '';
-const timeCache = Number(process.env.TIME_EXPIRATION_CACHE);
+const timeCache = Number(process.env.TIME_EXPIRATION_CACHE || '24'); // default: 6 horas
 
 export async function registerDiscrepancie(
   tipo: 'pago' | 'reverso',
@@ -29,11 +29,18 @@ export async function registerDiscrepancie(
     mensaje: `Se detectó necesidad de ${tipo}`,
     expirationDateClean,
   };
+  console.log("Intentando insertar en DynamoDB el siguiente ítem:");
+  console.log(JSON.stringify(registro, null, 2));
 
-  await docClient.put({
-    TableName: tableDiscrepancias,
-    Item: registro,
-  }).promise();
+  try {
+    await docClient.put({
+      TableName: tableDiscrepancias,
+      Item: registro,
+    }).promise();
 
-  console.log(`Discrepancia registrada: ${tipo} - orderNo: ${item.orderNo}`);
+    console.log(`Discrepancia registrada: ${tipo} - orderNo: ${item.orderNo}`);
+  } catch (err: any) {
+    console.error(`Error al insertar discrepancia: ${err.message}`);
+    console.error(err);
+  }
 }

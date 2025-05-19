@@ -5,37 +5,43 @@ const dynamo = new DynamoDB.DocumentClient();
 const DISCREPANCY_TABLE = process.env.DISCREPANCY_TABLE || '';
 const AUDIT_TABLE = process.env.AUDIT_TABLE || '';
 const NUM_REINTENTOS = Number(process.env.NUM_REINTENTOS || '3');
-const TIEMPO_REINTENTOS = Number(process.env.TIME_REINTENTOS || '30'); // en minutos
+const TIEMPO_REINTENTOS = Number(process.env.TIME_REINTENTOS || '30'); // minutos
 
 export const handler = async () => {
   try {
     const now = Date.now();
 
-    // Obtener discrepancias pendientes
+    // Leer discrepancias
     const result = await dynamo.scan({ TableName: DISCREPANCY_TABLE }).promise();
     const discrepancias = result.Items || [];
 
-    const tiempoEntreIntentos = TIEMPO_REINTENTOS / NUM_REINTENTOS; // ej: 30 / 3 = 10 minutos
+    const tiempoEntreIntentos = TIEMPO_REINTENTOS / NUM_REINTENTOS;
 
     for (const item of discrepancias) {
       const { orderNo, statusPayment, tipoAccion, intentos = 0, lastAttempt = 0 } = item;
+
+      // Si ya es SUCCESS, no hacer nada
+      if (statusPayment === 'SUCCESS') {
+        console.log(`Ya se completó con éxito ${orderNo}. No se requiere nuevo intento.`);
+        continue;
+      }
 
       if (intentos >= NUM_REINTENTOS) {
         console.log(`Máximo de reintentos alcanzado para ${orderNo}`);
         continue;
       }
 
-      const minutosDesdeUltimoIntento = (now - lastAttempt) / 60000;
-      if (minutosDesdeUltimoIntento < tiempoEntreIntentos) {
-        console.log(`Aún no ha pasado el tiempo entre intentos para ${orderNo}`);
+      const minutosDesdeUltimo = (now - lastAttempt) / 60000;
+      if (minutosDesdeUltimo < tiempoEntreIntentos) {
+        console.log(`Aún no ha pasado el intervalo para ${orderNo}`);
         continue;
       }
 
-      console.log(`Reintentando acción para ${orderNo}, intento #${intentos + 1}`);
+      console.log(`Reintentando ${tipoAccion} para ${orderNo}, intento #${intentos + 1}`);
 
-      // Simulación de acción (luego aquí irá tu integración real de pago o reverso)
+      // Simulación de intento
       const exito = Math.random() < 0.5;
-      const nuevoStatus = exito ? 'SUCCESS' : 'FAILED';
+      const nuevoStatus = exito ? 'SUCCESS' : statusPayment; // solo actualiza si tiene éxito
 
       // Actualizar tabla de discrepancias
       await dynamo.update({
@@ -49,7 +55,7 @@ export const handler = async () => {
         }
       }).promise();
 
-      // Insertar en tabla de auditoría
+      // Registrar intento en tabla auditoría
       const auditItem = {
         id: uuidv4(),
         orderNo,
