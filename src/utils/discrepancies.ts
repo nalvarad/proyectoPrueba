@@ -24,7 +24,7 @@ export async function registerDiscrepancie(
     corresponsalCode: item.corresponsal?.codigo ?? 'N/A',
     codetransferencia: item.orderNo,
     estado,
-    numeroIntentos: 1,
+    numeroIntentos: 0,
     statusConciliacion: tipo.toUpperCase(),
     mensaje: `Se detectó necesidad de ${tipo}`,
     expirationDateClean,

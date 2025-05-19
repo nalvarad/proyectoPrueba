@@ -8,7 +8,10 @@ import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as tasks from 'aws-cdk-lib/aws-stepfunctions-tasks';
 import * as path from 'path';
-import * as ec2 from "aws-cdk-lib/aws-ec2";
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as events from 'aws-cdk-lib/aws-events';
+import * as targets from 'aws-cdk-lib/aws-events-targets';
+import { Duration } from 'aws-cdk-lib';
 
 export class MsGirosConciliacionStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -70,6 +73,13 @@ export class MsGirosConciliacionStack extends cdk.Stack {
       retention: logs.RetentionDays.ONE_WEEK,
       removalPolicy: cdk.RemovalPolicy.DESTROY
     });
+
+     new logs.LogGroup(this, 'retryDiscrepanciasLogGroup', {
+      logGroupName: `/aws/lambda/${this.stackName}-retry-discrepancies`,
+      retention: logs.RetentionDays.ONE_WEEK,
+      removalPolicy: cdk.RemovalPolicy.DESTROY
+    });
+
 
 
     // ======== IAM Role para Lambda ========
@@ -297,7 +307,7 @@ export class MsGirosConciliacionStack extends cdk.Stack {
     });
 
     // ======== Lambda para comparaDiscrepancias ========
-    const fncompararDiscrepancias = new NodejsFunction(this, `compararDiscrepanciasFn`, {
+    const fnCompararDiscrepancias = new NodejsFunction(this, `compararDiscrepanciasFn`, {
       functionName: `${this.stackName}-compare-discrepancies`,
       memorySize: 1024,
       timeout: cdk.Duration.seconds(15),
@@ -306,10 +316,7 @@ export class MsGirosConciliacionStack extends cdk.Stack {
       environment: {
         DISCREPANCY_TABLE: discrepanciasTable.tableName,
         AUDIT_TABLE: auditoriaTable.tableName,
-        TIME_EXPIRATION_CACHE: config.TIME_EXPIRATION_CACHE, // En Horas
-        TIME_REINTENTOS: config.TIME_REINTENTOS, // En Minutos
-        NUM_REINTENTOS: config.NUM_REINTENTOS //Numero de reintentos
-
+        TIME_EXPIRATION_CACHE: config.TIME_EXPIRATION_CACHE,
       },
       role: role,
       tracing: lambda.Tracing.ACTIVE,
@@ -321,11 +328,48 @@ export class MsGirosConciliacionStack extends cdk.Stack {
       }
     });
 
-    // ======== Permiso de las tablas a las lambdas ========
-    discrepanciasTable.grantWriteData(fncompararDiscrepancias);
-    auditoriaTable.grantWriteData(fncompararDiscrepancias);
-    tableOnlinePayment.grantReadData(fnConsultarData);
+    const fnRetryDiscrepancias = new NodejsFunction(this, 'RetryDiscrepanciasFn', {
+      functionName: `${this.stackName}-retry-discrepancies`,
+      entry: path.join(__dirname, `/../src/functions/retryDiscrepanciesHandler.function.ts`),
+      handler: 'handler',
+      runtime: lambda.Runtime.NODEJS_16_X,
+      timeout: Duration.minutes(5),
+      memorySize: 1024,
+      environment: {
+        DISCREPANCY_TABLE: discrepanciasTable.tableName,
+        AUDIT_TABLE: auditoriaTable.tableName,
+        TIME_REINTENTOS: config.TIME_REINTENTOS, // En Minutos
+        NUM_REINTENTOS: config.NUM_REINTENTOS //Numero de reintentos
+      },
+      role: role,
+      tracing: lambda.Tracing.ACTIVE,
+      bundling: {
+        minify: true,
+        sourceMap: true,
+        externalModules: ["aws-sdk"],
+      }
+    });
 
+
+    // ======== Permiso de las tablas a las lambdas ========
+    discrepanciasTable.grantWriteData(fnCompararDiscrepancias);
+    auditoriaTable.grantWriteData(fnCompararDiscrepancias);
+    tableOnlinePayment.grantReadData(fnConsultarData);
+    discrepanciasTable.grantReadWriteData(fnRetryDiscrepancias);
+    auditoriaTable.grantWriteData(fnRetryDiscrepancias);
+
+
+    // ======== EventBridge Rule to Trigger Retry Lambda Periodically ========
+    // Calcular intervalo de reintentos (en minutos)
+    const intervaloReintentos = Math.floor(Number(config.TIME_REINTENTOS) / Number(config.NUM_REINTENTOS));
+    // Crear regla que se ejecuta cada `intervaloReintentos` minutos
+    const reglaReintentos = new events.Rule(this, 'ReglaReintentoDiscrepancias', {
+      schedule: events.Schedule.rate(Duration.minutes(intervaloReintentos)),
+      description: 'Regla que ejecuta la Lambda de reintento de discrepancias de forma periódica',
+    });
+    
+    reglaReintentos.addTarget(new targets.LambdaFunction(fnRetryDiscrepancias));
+    
     // ====== Step Functions ========
     // 1. Consultar DynamoDB
     const consultarDynamoTask = new tasks.LambdaInvoke(this, 'TaskConsultarDynamoDB', {
@@ -360,7 +404,7 @@ export class MsGirosConciliacionStack extends cdk.Stack {
 
     // 3.2 Lambda 3: comparar y registrar discrepancias (sin evaluar en Step)
     const compararYRegistrar = new tasks.LambdaInvoke(this, 'CompararYRegistrarDiscrepancia', {
-      lambdaFunction: fncompararDiscrepancias,
+      lambdaFunction: fnCompararDiscrepancias,
       payload: sfn.TaskInput.fromObject({
         orderNo: sfn.JsonPath.stringAt('$.orderNo'),
         statusPayment: sfn.JsonPath.stringAt('$.statusPayment'),
@@ -370,18 +414,15 @@ export class MsGirosConciliacionStack extends cdk.Stack {
       resultPath: sfn.JsonPath.DISCARD
     });
 
-    // 4. Encadenar subflujo del map
     mapProcesarCadaItem.iterator(
       consultarSybase.next(compararYRegistrar)
     );
 
-    // 5. Definir flujo completo
     const flujoConciliacion = consultarDynamoTask
       .next(prepararItemsMap)
       .next(mapProcesarCadaItem)
       .next(new sfn.Succeed(this, 'Fin'));
 
-    // 6. Crear Step Function
     new sfn.StateMachine(this, 'StateMachineConciliacion', {
       stateMachineName: `${this.stackName}-sfn-conciliacion`,
       definition: flujoConciliacion,
@@ -396,27 +437,27 @@ export class MsGirosConciliacionStack extends cdk.Stack {
 
     /*
     //->CORRESPONSAL RIA
-
+  
     //STEPF REVERSE PAYMENT ORDER
     const sfReversePaymentOrderCorresponsalRia = sfReversePaymentOrderRia(this, lambdaIntegrator, { roleStepFunction, logGroup, nameSecret: config.SECRET_MANAGER_RIA_CRED });
     //STEPF ONLINE PAYMENT ORDER
     const sfonlinePaymentOrderCorresponsalRia = sfOnlinePaymentOrderRia(this, lambdaIntegrator, { roleStepFunction, logGroup, nameSecret: config.SECRET_MANAGER_RIA_CRED });
-
+  
     //->CORRESPONSAL INTERMEX
     //PAY ORDER
     const sfPayOrderIntermex = sfOnlinePaymentOrderIntermex(this, tableAuthorizationTokenCorrespondent, lambdaIntegrator, { roleStepFunction, logGroup, nameSecret: config.SECRET_MANAGER_INTERMEX_CRED })
     //REVERSE ORDER 
     const sfreverseOrderIntermex = sfReverseOrderIntermex(this, lambdaIntegrator, tableAuthorizationTokenCorrespondent, { roleStepFunction, logGroup, nameSecret: config.SECRET_MANAGER_INTERMEX_CRED });
-
+  
     //->CORRESPONSAL TRANSNETWORK
     //PAY ORDER
     const sfonlinePaymentOrderTransnetwork = sfOnlinePaymentTransnetwork(this, lambdaIntegrator, { roleStepFunction, logGroup, nameSecret: config.SECRET_MANAGER_TRANSNETWORK_CRED });
     //REVERSE ORDER
     const sfonlineReversePaymentOrderTransnetwork = sfOnlineReversePaymentTransnetwork(this, lambdaIntegrator, { roleStepFunction, logGroup, nameSecret: config.SECRET_MANAGER_TRANSNETWORK_CRED });
-
-
-
-
+  
+  
+  
+  
     //Rules for EventBridge
     //RIA
     reversePaymentOrderRiaRule(this, eventBus, sfReversePaymentOrderCorresponsalRia.stateMachineArn);
@@ -427,12 +468,12 @@ export class MsGirosConciliacionStack extends cdk.Stack {
     RequestOrderCodeAndNameINTERMEXRule(this, eventBus, sfconsultOrderIntermex.stateMachineArn)
     onlinePaymentOrderIntermexRule(this, eventBus, sfPayOrderIntermex.stateMachineArn)
     reversePaymentOrderIntermexRule(this, eventBus, sfreverseOrderIntermex.stateMachineArn)
-
+  
     //TRANSNETWORK
     RequestOrderCodeAndNameTransnetworkRule(this, eventBus, sfconsultOnlineOrderTransnetwork.stateMachineArn);
     onlinePaymentOrderTransnetworkRule(this, eventBus, sfonlinePaymentOrderTransnetwork.stateMachineArn);
     reversePaymentOrderTransnetworkRule(this, eventBus, sfonlineReversePaymentOrderTransnetwork.stateMachineArn);
-
+  
     */
 
 

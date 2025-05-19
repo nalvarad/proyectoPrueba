@@ -21,7 +21,7 @@ export async function registerAudit(input: {
     codetransferencia: input.orderNo,
     statusPayment: input.statusPayment,
     estado: input.estado,
-    numeroIntentos: 1,
+    numeroIntentos: 0,
     fechaIntentos: now,
     corresponsalCode: input.corresponsalCode ?? 'N/A',
     mensaje: input.mensaje,

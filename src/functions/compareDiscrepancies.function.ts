@@ -3,10 +3,6 @@ import { registerDiscrepancie } from '../utils/discrepancies';
 import { registerAudit } from '../utils/audit';
 
 const step = new StepFunctions();
-const TIME_REINTENTOS = Number(process.env.TIME_REINTENTOS) || 15; //Tiempo de reintentos en min 
-const NUM_REINTENTOS = Number(process.env.NUM_REINTENTOS) || 2; //Numero de reintentos
-
-
 const delay = (ms: number) => new Promise((res) => setTimeout(res, ms));
 
 function getRandomDelay() {
