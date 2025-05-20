@@ -1,69 +1,100 @@
 import { DynamoDB } from 'aws-sdk';
 import { v4 as uuidv4 } from 'uuid';
+import { BuildConfig } from '../../config/buildConfig'; // Ajusta si la ruta es distinta
 
 const dynamo = new DynamoDB.DocumentClient();
 const DISCREPANCY_TABLE = process.env.DISCREPANCY_TABLE || '';
 const AUDIT_TABLE = process.env.AUDIT_TABLE || '';
-const NUM_REINTENTOS = Number(process.env.NUM_REINTENTOS || '3');
-const TIEMPO_REINTENTOS = Number(process.env.TIME_REINTENTOS || '30'); // minutos
 
 export const handler = async () => {
-  try {
-    const now = Date.now();
+  const start = Date.now();
 
-    // Leer discrepancias
+  // Obtener hora local en formato ISO ajustado a UTC-5
+  const now = new Date();
+  const localDate = new Date(now.getTime() - 5 * 60 * 60 * 1000);
+  const localTimeStr = localDate.toISOString().replace('T', ' ').replace('Z', '');
+  console.log(`[${localTimeStr}] Inicio de ejecución Lambda retryDiscrepancias`);
+
+  try {
+    // Cargar configuración desde SSM usando tu clase BuildConfig
+    const buildConfig = new BuildConfig();
+    await buildConfig.getConfig();
+    const { TIME_REINTENTOS, NUM_REINTENTOS } = buildConfig.getRetryConfig();
+    const tiempoEntreIntentos = TIME_REINTENTOS / NUM_REINTENTOS;
+
     const result = await dynamo.scan({ TableName: DISCREPANCY_TABLE }).promise();
     const discrepancias = result.Items || [];
 
-    const tiempoEntreIntentos = TIEMPO_REINTENTOS / NUM_REINTENTOS;
-
     for (const item of discrepancias) {
-      const { orderNo, statusPayment, tipoAccion, intentos = 0, lastAttempt = 0 } = item;
+      const {
+        id,
+        orderNo,
+        statusPayment,
+        statusConciliacion,
+        numeroIntentos = 0,
+        lastAttempt = 0,
+        codetransferencia,
+        corresponsalCode,
+        estado,
+        expirationDateClean
+      } = item;
 
-      // Si ya es SUCCESS, no hacer nada
-      if (statusPayment === 'SUCCESS') {
-        console.log(`Ya se completó con éxito ${orderNo}. No se requiere nuevo intento.`);
+      if (!orderNo || !statusConciliacion) {
+        console.warn(`Registro incompleto, se omite: ${JSON.stringify(item)}`);
         continue;
       }
 
-      if (intentos >= NUM_REINTENTOS) {
+      const tipoAccion = statusConciliacion.toLowerCase(); // "pago" o "reverso"
+
+      if (statusPayment?.toUpperCase() === 'SUCCESS') {
+        console.log(`Ya fue procesado con éxito: ${orderNo}`);
+        continue;
+      }
+
+      if (numeroIntentos >= NUM_REINTENTOS) {
         console.log(`Máximo de reintentos alcanzado para ${orderNo}`);
         continue;
       }
 
-      const minutosDesdeUltimo = (now - lastAttempt) / 60000;
+      const minutosDesdeUltimo = (Date.now() - lastAttempt) / 60000;
       if (minutosDesdeUltimo < tiempoEntreIntentos) {
-        console.log(`Aún no ha pasado el intervalo para ${orderNo}`);
+        console.log(`Aún no ha pasado el tiempo entre intentos para ${orderNo}`);
         continue;
       }
 
-      console.log(`Reintentando ${tipoAccion} para ${orderNo}, intento #${intentos + 1}`);
+      const intentoActual = numeroIntentos + 1;
+      const mensaje = `Intento #${intentoActual} para ${tipoAccion.toUpperCase()} → `;
 
-      // Simulación de intento
+      console.log(`Reintentando ${tipoAccion.toUpperCase()} para ${orderNo} - intento #${intentoActual}`);
+
+      // Simulación (reemplazar por la lógica real)
       const exito = Math.random() < 0.5;
-      const nuevoStatus = exito ? 'SUCCESS' : statusPayment; // solo actualiza si tiene éxito
+      const nuevoStatus = exito ? 'SUCCESS' : statusPayment;
 
-      // Actualizar tabla de discrepancias
       await dynamo.update({
         TableName: DISCREPANCY_TABLE,
-        Key: { id: item.id, orderNo },
-        UpdateExpression: 'SET statusPayment = :status, intentos = :i, lastAttempt = :now',
+        Key: { id, orderNo },
+        UpdateExpression: 'SET statusPayment = :status, numeroIntentos = :i, lastAttempt = :now',
         ExpressionAttributeValues: {
           ':status': nuevoStatus,
-          ':i': intentos + 1,
-          ':now': now
+          ':i': intentoActual,
+          ':now': Date.now()
         }
       }).promise();
 
-      // Registrar intento en tabla auditoría
       const auditItem = {
         id: uuidv4(),
         orderNo,
-        fecha: new Date().toISOString(),
-        tipoAccion,
-        statusPayment: nuevoStatus,
-        mensaje: `Intento #${intentos + 1} → ${tipoAccion}`,
-        resultado: exito ? 'EXITOSO' : 'FALLIDO'
+        codetransferencia,
+        corresponsalCode,
+        estado,
+        expirationDateClean,
+        fecha: item.fecha,
+        fechaIntentos: new Date().toISOString(),
+        mensaje: `${mensaje}${exito ? 'éxito' : 'fallo'}`,
+        numeroIntentos: intentoActual,
+        resultado: exito ? 'EXITOSO' : 'FALLIDO',
+        statusPayment: nuevoStatus
       };
 
       await dynamo.put({
@@ -72,9 +103,12 @@ export const handler = async () => {
       }).promise();
     }
 
+    const duration = Date.now() - start;
+    console.log(`[${localTimeStr}] Lambda finalizó en ${duration} ms`);
+
     return {
       statusCode: 200,
-      body: 'Proceso de reintentos ejecutado.'
+      body: 'Proceso de reintentos ejecutado correctamente.'
     };
 
   } catch (error) {

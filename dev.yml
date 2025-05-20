@@ -29,3 +29,4 @@ URL_API_PRUEBA: "https://02c8-190-154-173-170.ngrok-free.app/api/conciliacion/or
 TIME_EXPIRATION_CACHE: "24"
 TIME_REINTENTOS: "15"
 NUM_REINTENTOS: "2"
+SM_ARN: "arn:aws:ssm:us-east-1:538884319140:parameter/int-ms-giros-conciliacion/dev"

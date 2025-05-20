@@ -21,6 +21,7 @@ const Main = async (app: any) => {
     },
     tags: config
   });
+  
 }
 
 Main(app);

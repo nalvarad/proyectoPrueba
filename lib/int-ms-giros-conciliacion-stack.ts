@@ -13,6 +13,7 @@ import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import { Duration } from 'aws-cdk-lib';
 
+
 export class MsGirosConciliacionStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
@@ -74,7 +75,7 @@ export class MsGirosConciliacionStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY
     });
 
-     new logs.LogGroup(this, 'retryDiscrepanciasLogGroup', {
+    new logs.LogGroup(this, 'retryDiscrepanciasLogGroup', {
       logGroupName: `/aws/lambda/${this.stackName}-retry-discrepancies`,
       retention: logs.RetentionDays.ONE_WEEK,
       removalPolicy: cdk.RemovalPolicy.DESTROY
@@ -202,6 +203,13 @@ export class MsGirosConciliacionStack extends cdk.Stack {
       actions: ['sns:Publish'],
       resources: [config.SNS_ARN]
     });
+
+    role.addToPolicy(new iam.PolicyStatement({
+      actions: ['ssm:GetParameter'],
+      resources: [config.SM_ARN]
+    }));
+
+
 
     role.addToPolicy(snsPublishPolicy);
     role.addToPolicy(networkingInterfaceLambda);
@@ -338,9 +346,8 @@ export class MsGirosConciliacionStack extends cdk.Stack {
       environment: {
         DISCREPANCY_TABLE: discrepanciasTable.tableName,
         AUDIT_TABLE: auditoriaTable.tableName,
-        TIME_REINTENTOS: config.TIME_REINTENTOS, // En Minutos
-        NUM_REINTENTOS: config.NUM_REINTENTOS //Numero de reintentos
-      },
+      }
+      ,
       role: role,
       tracing: lambda.Tracing.ACTIVE,
       bundling: {
@@ -359,17 +366,15 @@ export class MsGirosConciliacionStack extends cdk.Stack {
     auditoriaTable.grantWriteData(fnRetryDiscrepancias);
 
 
-    // ======== EventBridge Rule to Trigger Retry Lambda Periodically ========
-    // Calcular intervalo de reintentos (en minutos)
-    const intervaloReintentos = Math.floor(Number(config.TIME_REINTENTOS) / Number(config.NUM_REINTENTOS));
-    // Crear regla que se ejecuta cada `intervaloReintentos` minutos
+    // ======== EventBridge Rule Dispara cada cierto tiempo la Retry Lambda Periodically ========
     const reglaReintentos = new events.Rule(this, 'ReglaReintentoDiscrepancias', {
-      schedule: events.Schedule.rate(Duration.minutes(intervaloReintentos)),
-      description: 'Regla que ejecuta la Lambda de reintento de discrepancias de forma periódica',
+      schedule: events.Schedule.rate(Duration.minutes(1)),
+      description: 'Regla que ejecuta la Lambda de reintento de discrepancias cada 1 minuto',
     });
-    
+
+    // Vincular la regla a la Lambda como destino
     reglaReintentos.addTarget(new targets.LambdaFunction(fnRetryDiscrepancias));
-    
+
     // ====== Step Functions ========
     // 1. Consultar DynamoDB
     const consultarDynamoTask = new tasks.LambdaInvoke(this, 'TaskConsultarDynamoDB', {
