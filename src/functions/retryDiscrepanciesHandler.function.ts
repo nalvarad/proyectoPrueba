@@ -53,6 +53,27 @@ export const handler = async () => {
 
       if (numeroIntentos >= NUM_REINTENTOS) {
         console.log(`Máximo de reintentos alcanzado para ${orderNo}`);
+
+        const auditItem = {
+          id: uuidv4(),
+          orderNo,
+          codetransferencia,
+          corresponsalCode,
+          estado,
+          expirationDateClean,
+          fecha: item.fecha,
+          fechaIntentos: new Date().toISOString(),
+          mensaje: `Intento #${numeroIntentos} para ${tipoAccion.toUpperCase()} -> Excedió número máximo de reintentos`,
+          numeroIntentos: numeroIntentos,
+          resultado: 'FALLIDO',
+          statusPayment
+        };
+
+        await dynamo.put({
+          TableName: AUDIT_TABLE,
+          Item: auditItem
+        }).promise();
+
         continue;
       }
 
@@ -63,11 +84,11 @@ export const handler = async () => {
       }
 
       const intentoActual = numeroIntentos + 1;
-      const mensaje = `Intento #${intentoActual} para ${tipoAccion.toUpperCase()} → `;
+      const mensaje = `Intento #${intentoActual} para ${tipoAccion.toUpperCase()} ->`;
 
       console.log(`Reintentando ${tipoAccion.toUpperCase()} para ${orderNo} - intento #${intentoActual}`);
 
-      // Simulación (reemplazar por la lógica real)
+      // Simulación (reemplazar por lógica real de pago/reverso)
       const exito = Math.random() < 0.5;
       const nuevoStatus = exito ? 'SUCCESS' : statusPayment;
 
