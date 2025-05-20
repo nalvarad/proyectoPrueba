@@ -336,6 +336,10 @@ export class MsGirosConciliacionStack extends cdk.Stack {
       }
     });
 
+    const parts = this.stackName.split('-');
+    const stage = parts.pop() || '';
+    const nameStack = parts.join('-');
+
     const fnRetryDiscrepancias = new NodejsFunction(this, 'RetryDiscrepanciasFn', {
       functionName: `${this.stackName}-retry-discrepancies`,
       entry: path.join(__dirname, `/../src/functions/retryDiscrepanciesHandler.function.ts`),
@@ -346,8 +350,9 @@ export class MsGirosConciliacionStack extends cdk.Stack {
       environment: {
         DISCREPANCY_TABLE: discrepanciasTable.tableName,
         AUDIT_TABLE: auditoriaTable.tableName,
-      }
-      ,
+        STACK_NAME: nameStack, 
+        STAGE: stage,      
+      },
       role: role,
       tracing: lambda.Tracing.ACTIVE,
       bundling: {
@@ -356,6 +361,7 @@ export class MsGirosConciliacionStack extends cdk.Stack {
         externalModules: ["aws-sdk"],
       }
     });
+
 
 
     // ======== Permiso de las tablas a las lambdas ========
