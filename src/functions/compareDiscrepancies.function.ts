@@ -16,6 +16,8 @@ export const compareDiscrepancies = async (event: any) => {
   const orderNo = event.orderNo;
   const statusPayment = event.statusPayment?.toUpperCase();
   const statusSybase = event.statusSybase?.toUpperCase();
+  console.log("EVENTO COMPLETO RECIBIDO:");
+  console.log(JSON.stringify(event, null, 2));
 
   console.log(`Comparando orderNo: ${orderNo}`);
   console.log(`-> DynamoDB statusPayment: ${statusPayment ?? 'NO ENCONTRADO'}`);

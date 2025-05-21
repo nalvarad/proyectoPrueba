@@ -350,8 +350,8 @@ export class MsGirosConciliacionStack extends cdk.Stack {
       environment: {
         DISCREPANCY_TABLE: discrepanciasTable.tableName,
         AUDIT_TABLE: auditoriaTable.tableName,
-        STACK_NAME: nameStack, 
-        STAGE: stage,      
+        STACK_NAME: nameStack,
+        STAGE: stage,
       },
       role: role,
       tracing: lambda.Tracing.ACTIVE,
@@ -381,6 +381,7 @@ export class MsGirosConciliacionStack extends cdk.Stack {
     // Vincular la regla a la Lambda como destino
     reglaReintentos.addTarget(new targets.LambdaFunction(fnRetryDiscrepancias));
 
+ 
     // ====== Step Functions ========
     // 1. Consultar DynamoDB
     const consultarDynamoTask = new tasks.LambdaInvoke(this, 'TaskConsultarDynamoDB', {
@@ -420,10 +421,15 @@ export class MsGirosConciliacionStack extends cdk.Stack {
         orderNo: sfn.JsonPath.stringAt('$.orderNo'),
         statusPayment: sfn.JsonPath.stringAt('$.statusPayment'),
         statusSybase: sfn.JsonPath.stringAt('$.sybaseResult.Payload.body.status'),
-        corresponsal: sfn.JsonPath.stringAt('$.corresponsal')
+        corresponsal: sfn.JsonPath.stringAt('$.corresponsal'),
+        fecha: sfn.JsonPath.stringAt('$.fecha'),
+        monto: sfn.JsonPath.numberAt('$.monto'),
+        paymentId: sfn.JsonPath.stringAt('$.paymentId'),
+        secuencia: sfn.JsonPath.stringAt('$.secuencia')
       }),
       resultPath: sfn.JsonPath.DISCARD
     });
+
 
     mapProcesarCadaItem.iterator(
       consultarSybase.next(compararYRegistrar)
@@ -444,6 +450,7 @@ export class MsGirosConciliacionStack extends cdk.Stack {
       tracingEnabled: true,
       role: roleStepFunction,
     });
+
 
 
     /*

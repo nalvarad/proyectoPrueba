@@ -1,3 +1,4 @@
+
 import { DynamoDB } from 'aws-sdk';
 import { v4 as uuidv4 } from 'uuid';
 import { BuildConfig } from '../../config/buildConfig'; // Ajusta si la ruta es distinta
@@ -51,32 +52,6 @@ export const handler = async () => {
         continue;
       }
 
-      if (numeroIntentos >= NUM_REINTENTOS) {
-        console.log(`Máximo de reintentos alcanzado para ${orderNo}`);
-
-        const auditItem = {
-          id: uuidv4(),
-          orderNo,
-          codetransferencia,
-          corresponsalCode,
-          estado,
-          expirationDateClean,
-          fecha: item.fecha,
-          fechaIntentos: new Date().toISOString(),
-          mensaje: `Intento #${numeroIntentos} para ${tipoAccion.toUpperCase()} -> Excedió número máximo de reintentos`,
-          numeroIntentos: numeroIntentos,
-          resultado: 'FALLIDO',
-          statusPayment
-        };
-
-        await dynamo.put({
-          TableName: AUDIT_TABLE,
-          Item: auditItem
-        }).promise();
-
-        continue;
-      }
-
       const minutosDesdeUltimo = (Date.now() - lastAttempt) / 60000;
       if (minutosDesdeUltimo < tiempoEntreIntentos) {
         console.log(`Aún no ha pasado el tiempo entre intentos para ${orderNo}`);
@@ -84,13 +59,26 @@ export const handler = async () => {
       }
 
       const intentoActual = numeroIntentos + 1;
-      const mensaje = `Intento #${intentoActual} para ${tipoAccion.toUpperCase()} ->`;
+      let mensaje = `Intento #${intentoActual} para ${tipoAccion.toUpperCase()} -> `;
+      let resultado = '';
+      let nuevoStatus = statusPayment;
 
       console.log(`Reintentando ${tipoAccion.toUpperCase()} para ${orderNo} - intento #${intentoActual}`);
 
-      // Simulación (reemplazar por lógica real de pago/reverso)
+      // Simulación (reemplazar por la lógica real)
       const exito = Math.random() < 0.5;
-      const nuevoStatus = exito ? 'SUCCESS' : statusPayment;
+      if (exito) {
+        nuevoStatus = 'SUCCESS';
+        mensaje += 'éxito';
+        resultado = 'EXITOSO';
+      } else {
+        if (intentoActual >= NUM_REINTENTOS) {
+          mensaje = `Intento #${intentoActual} para ${tipoAccion.toUpperCase()} -> Excedió número máximo de reintentos`;
+        } else {
+          mensaje += 'fallo';
+        }
+        resultado = 'FALLIDO';
+      }
 
       await dynamo.update({
         TableName: DISCREPANCY_TABLE,
@@ -112,9 +100,9 @@ export const handler = async () => {
         expirationDateClean,
         fecha: item.fecha,
         fechaIntentos: new Date().toISOString(),
-        mensaje: `${mensaje}${exito ? 'éxito' : 'fallo'}`,
+        mensaje,
         numeroIntentos: intentoActual,
-        resultado: exito ? 'EXITOSO' : 'FALLIDO',
+        resultado,
         statusPayment: nuevoStatus
       };
 
