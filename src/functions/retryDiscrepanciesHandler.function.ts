@@ -6,23 +6,26 @@ const DISCREPANCY_TABLE = process.env.DISCREPANCY_TABLE || '';
 const AUDIT_TABLE = process.env.AUDIT_TABLE || '';
 const TIME_REINTENTOS = process.env.TIME_REINTENTOS;
 const NUM_REINTENTOS = process.env.NUM_REINTENTOS;
+
 export const handler = async () => {
   const start = Date.now();
 
-  // Obtener hora local en formato ISO ajustado a UTC-5
+  // Hora local en formato legible
   const now = new Date();
   const localDate = new Date(now.getTime() - 5 * 60 * 60 * 1000);
   const localTimeStr = localDate.toISOString().replace('T', ' ').replace('Z', '');
   console.log(`[${localTimeStr}] Inicio de ejecución Lambda retryDiscrepancias`);
+
   try {
-
-
-    // Tiempo entre intentos en milisegundos
     const tiempoEntreIntentosMs = (Number(TIME_REINTENTOS) * 60 * 1000) / Number(NUM_REINTENTOS);
+    const tiempoEntreIntentosSegundos = (tiempoEntreIntentosMs / 1000).toFixed(2);
 
-    // Obtener discrepancias
     const result = await dynamo.scan({ TableName: DISCREPANCY_TABLE }).promise();
     const discrepancias = result.Items || [];
+
+    if (discrepancias.length === 0) {
+      console.log(`[${localTimeStr}] No se encontraron registros pendientes en la tabla de discrepancias.`);
+    }
 
     for (const item of discrepancias) {
       const {
@@ -50,16 +53,20 @@ export const handler = async () => {
         continue;
       }
 
-      // No continuar si ya superó el número de intentos
       if (numeroIntentos >= Number(NUM_REINTENTOS)) {
         console.log(`Se alcanzó el máximo de reintentos para ${orderNo}`);
         continue;
       }
 
-      const tiempoDesdeUltimoIntento = Date.now() - Number(lastAttempt);
+      const ahora = Date.now();
+      const tiempoDesdeUltimoIntento = ahora - Number(lastAttempt);
+      const tiempoDesdeUltimoIntentoSegundos = (tiempoDesdeUltimoIntento / 1000).toFixed(2);
+      const lastAttemptReadable = lastAttempt > 0
+        ? new Date(Number(lastAttempt)).toISOString().replace('T', ' ').replace('Z', '')
+        : '—';
 
       if (lastAttempt > 0 && tiempoDesdeUltimoIntento < tiempoEntreIntentosMs) {
-        console.log(`Aún no ha pasado el tiempo entre intentos para ${orderNo}`);
+        console.log(`Aún no ha pasado el tiempo entre intentos para ${orderNo} - han pasado ${tiempoDesdeUltimoIntentoSegundos}s de los ${tiempoEntreIntentosSegundos}s requeridos (último intento fue: ${lastAttemptReadable})`);
         continue;
       }
 
@@ -68,7 +75,11 @@ export const handler = async () => {
       let mensaje = `Intento #${intentoActual} para ${tipoAccion.toUpperCase()} -> `;
       let resultado = '';
 
-      console.log(`Reintentando ${tipoAccion.toUpperCase()} para ${orderNo} - intento #${intentoActual}`);
+      const logPrimerIntento = lastAttempt === 0
+        ? ' (primer intento)'
+        : ` (último intento fue hace ${tiempoDesdeUltimoIntentoSegundos}s a las ${lastAttemptReadable})`;
+
+      console.log(`Reintentando ${tipoAccion.toUpperCase()} para ${orderNo} - intento #${intentoActual}${logPrimerIntento}`);
 
       // Simulación de reintento (reemplazar con lógica real)
       const exito = Math.random() < 0.5;
@@ -91,7 +102,7 @@ export const handler = async () => {
         ExpressionAttributeValues: {
           ':status': nuevoStatus,
           ':i': intentoActual,
-          ':now': Date.now()
+          ':now': ahora
         }
       }).promise();
 

@@ -386,7 +386,7 @@ export class MsGirosConciliacionStack extends cdk.Stack {
     // ------------------------------------
     // 1. MODO MANUAL
     // ------------------------------------
-    const taskConsultarDynamoManual = new tasks.LambdaInvoke(this, 'ConsultarDynamoDB_Manual', {
+    const taskConsultarDynamoManual = new tasks.LambdaInvoke(this, 'Consulta Manual', {
       lambdaFunction: fnConsultarData,
       payload: sfn.TaskInput.fromObject({
         'orderNo.$': '$.orderNo'
@@ -434,7 +434,7 @@ export class MsGirosConciliacionStack extends cdk.Stack {
     // ------------------------------------
     // 2. MODO AUTOMÁTICO
     // ------------------------------------
-    const taskConsultarDynamoAuto = new tasks.LambdaInvoke(this, 'ConsultarDynamoDB_Automatico', {
+    const taskConsultarDynamoAuto = new tasks.LambdaInvoke(this, 'Consulta Automatica', {
       lambdaFunction: fnConsultarData,
       resultPath: '$.dynamoData',
       outputPath: '$'
