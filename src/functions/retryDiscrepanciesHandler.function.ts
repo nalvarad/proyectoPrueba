@@ -1,12 +1,11 @@
-
 import { DynamoDB } from 'aws-sdk';
 import { v4 as uuidv4 } from 'uuid';
-import { BuildConfig } from '../../config/buildConfig'; // Ajusta si la ruta es distinta
 
 const dynamo = new DynamoDB.DocumentClient();
 const DISCREPANCY_TABLE = process.env.DISCREPANCY_TABLE || '';
 const AUDIT_TABLE = process.env.AUDIT_TABLE || '';
-
+const TIME_REINTENTOS = process.env.TIME_REINTENTOS;
+const NUM_REINTENTOS = process.env.NUM_REINTENTOS;
 export const handler = async () => {
   const start = Date.now();
 
@@ -15,14 +14,13 @@ export const handler = async () => {
   const localDate = new Date(now.getTime() - 5 * 60 * 60 * 1000);
   const localTimeStr = localDate.toISOString().replace('T', ' ').replace('Z', '');
   console.log(`[${localTimeStr}] Inicio de ejecución Lambda retryDiscrepancias`);
-
   try {
-    // Cargar configuración desde SSM usando tu clase BuildConfig
-    const buildConfig = new BuildConfig();
-    await buildConfig.getConfig();
-    const { TIME_REINTENTOS, NUM_REINTENTOS } = buildConfig.getRetryConfig();
-    const tiempoEntreIntentos = TIME_REINTENTOS / NUM_REINTENTOS;
 
+
+    // Tiempo entre intentos en milisegundos
+    const tiempoEntreIntentosMs = (Number(TIME_REINTENTOS) * 60 * 1000) / Number(NUM_REINTENTOS);
+
+    // Obtener discrepancias
     const result = await dynamo.scan({ TableName: DISCREPANCY_TABLE }).promise();
     const discrepancias = result.Items || [];
 
@@ -45,41 +43,47 @@ export const handler = async () => {
         continue;
       }
 
-      const tipoAccion = statusConciliacion.toLowerCase(); // "pago" o "reverso"
+      const tipoAccion = statusConciliacion.toLowerCase();
 
       if (statusPayment?.toUpperCase() === 'SUCCESS') {
         console.log(`Ya fue procesado con éxito: ${orderNo}`);
         continue;
       }
 
-      const minutosDesdeUltimo = (Date.now() - lastAttempt) / 60000;
-      if (minutosDesdeUltimo < tiempoEntreIntentos) {
+      // No continuar si ya superó el número de intentos
+      if (numeroIntentos >= Number(NUM_REINTENTOS)) {
+        console.log(`Se alcanzó el máximo de reintentos para ${orderNo}`);
+        continue;
+      }
+
+      const tiempoDesdeUltimoIntento = Date.now() - Number(lastAttempt);
+
+      if (lastAttempt > 0 && tiempoDesdeUltimoIntento < tiempoEntreIntentosMs) {
         console.log(`Aún no ha pasado el tiempo entre intentos para ${orderNo}`);
         continue;
       }
 
       const intentoActual = numeroIntentos + 1;
+      let nuevoStatus = statusPayment;
       let mensaje = `Intento #${intentoActual} para ${tipoAccion.toUpperCase()} -> `;
       let resultado = '';
-      let nuevoStatus = statusPayment;
 
       console.log(`Reintentando ${tipoAccion.toUpperCase()} para ${orderNo} - intento #${intentoActual}`);
 
-      // Simulación (reemplazar por la lógica real)
+      // Simulación de reintento (reemplazar con lógica real)
       const exito = Math.random() < 0.5;
       if (exito) {
         nuevoStatus = 'SUCCESS';
         mensaje += 'éxito';
         resultado = 'EXITOSO';
       } else {
-        if (intentoActual >= NUM_REINTENTOS) {
-          mensaje = `Intento #${intentoActual} para ${tipoAccion.toUpperCase()} -> Excedió número máximo de reintentos`;
-        } else {
-          mensaje += 'fallo';
-        }
+        mensaje += intentoActual >= Number(NUM_REINTENTOS)
+          ? 'fallo definitivo (máximo alcanzado)'
+          : 'fallo';
         resultado = 'FALLIDO';
       }
 
+      // Actualizar tabla de discrepancias
       await dynamo.update({
         TableName: DISCREPANCY_TABLE,
         Key: { id, orderNo },
@@ -91,6 +95,7 @@ export const handler = async () => {
         }
       }).promise();
 
+      // Registrar auditoría
       const auditItem = {
         id: uuidv4(),
         orderNo,

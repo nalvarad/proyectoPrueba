@@ -4,7 +4,7 @@ import * as yaml from "js-yaml"
 export class BuildConfig {
 
     private nameStackApplication: string
-    private stage: string = "dev" //OJO AQUI cambio de entorno
+    private stage: string ;
     private env: any;
 
     constructor(nameStackApplication?: string, stage?: string) {
@@ -94,13 +94,6 @@ export class BuildConfig {
         return object[propName];
     }
 
-    getRetryConfig(): { TIME_REINTENTOS: number; NUM_REINTENTOS: number } {
-        const tiempo = Number(this.env?.TIME_REINTENTOS || 10);
-        const intentos = Number(this.env?.NUM_REINTENTOS || 2);
-        return {
-            TIME_REINTENTOS: tiempo,
-            NUM_REINTENTOS: intentos
-        };
-    }
+
 
 }
