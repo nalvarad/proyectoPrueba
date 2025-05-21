@@ -383,32 +383,70 @@ export class MsGirosConciliacionStack extends cdk.Stack {
     // Paso final
     const fin = new sfn.Succeed(this, 'Fin');
 
-    // === 1. Invocar Lambda que maneja automático o manual ===
-    const consultarDynamoTask = new tasks.LambdaInvoke(this, 'TaskConsultarDynamoDB', {
+    // ------------------------------------
+    // 1. MODO MANUAL
+    // ------------------------------------
+    const taskConsultarDynamoManual = new tasks.LambdaInvoke(this, 'ConsultarDynamoDB_Manual', {
       lambdaFunction: fnConsultarData,
       payload: sfn.TaskInput.fromObject({
-        'orderNo.$': '$.orderNo' // Si no viene, será undefined y la Lambda hace modo automático
+        'orderNo.$': '$.orderNo'
       }),
       resultPath: '$.dynamoData',
       outputPath: '$'
     });
 
-    // === 2. Paso para preparar arreglo si viene un solo registro (modo manual) ===
     const prepararArregloManual = new sfn.Pass(this, 'PrepararArregloManual', {
       parameters: {
-        'dynamoItems.$': 'States.Array($.dynamoData.Payload[0])'
+        'item.$': '$.dynamoData.Payload[0]'
       }
     });
 
-    // === 3. Paso para preparar arreglo completo (modo automático) ===
+    const consultarSybaseManual = new tasks.LambdaInvoke(this, 'ConsultarStatusSybaseManual', {
+      lambdaFunction: fnConsumeServices,
+      payload: sfn.TaskInput.fromObject({
+        orderNo: sfn.JsonPath.stringAt('$.item.orderNo')
+      }),
+      resultPath: '$.sybaseResult',
+      outputPath: '$'
+    });
+
+    const compararYRegistrarManual = new tasks.LambdaInvoke(this, 'CompararYRegistrarManual', {
+      lambdaFunction: fnCompararDiscrepancias,
+      payload: sfn.TaskInput.fromObject({
+        orderNo: sfn.JsonPath.stringAt('$.item.orderNo'),
+        statusPayment: sfn.JsonPath.stringAt('$.item.statusPayment'),
+        statusSybase: sfn.JsonPath.stringAt('$.sybaseResult.Payload.body.status'),
+        corresponsal: sfn.JsonPath.stringAt('$.item.corresponsal'),
+        fecha: sfn.JsonPath.stringAt('$.item.fecha'),
+        monto: sfn.JsonPath.numberAt('$.item.monto'),
+        paymentId: sfn.JsonPath.stringAt('$.item.paymentId'),
+        secuencia: sfn.JsonPath.stringAt('$.item.secuencia')
+      }),
+      resultPath: sfn.JsonPath.DISCARD
+    });
+
+    const flujoManual = taskConsultarDynamoManual
+      .next(prepararArregloManual)
+      .next(consultarSybaseManual)
+      .next(compararYRegistrarManual)
+      .next(fin);
+
+    // ------------------------------------
+    // 2. MODO AUTOMÁTICO
+    // ------------------------------------
+    const taskConsultarDynamoAuto = new tasks.LambdaInvoke(this, 'ConsultarDynamoDB_Automatico', {
+      lambdaFunction: fnConsultarData,
+      resultPath: '$.dynamoData',
+      outputPath: '$'
+    });
+
     const prepararItemsMap = new sfn.Pass(this, 'ExtraerSoloArregloDeDynamo', {
       parameters: {
         'dynamoItems.$': '$.dynamoData.Payload'
       }
     });
 
-    // === 4. Único MAP para procesar los items ===
-    const consultarSybase = new tasks.LambdaInvoke(this, 'ConsultarStatusSybase', {
+    const consultarSybaseAuto = new tasks.LambdaInvoke(this, 'ConsultarStatusSybaseAuto', {
       lambdaFunction: fnConsumeServices,
       payload: sfn.TaskInput.fromObject({
         orderNo: sfn.JsonPath.stringAt('$.orderNo')
@@ -417,7 +455,7 @@ export class MsGirosConciliacionStack extends cdk.Stack {
       outputPath: '$'
     });
 
-    const compararYRegistrar = new tasks.LambdaInvoke(this, 'CompararYRegistrarDiscrepancia', {
+    const compararYRegistrarAuto = new tasks.LambdaInvoke(this, 'CompararYRegistrarAuto', {
       lambdaFunction: fnCompararDiscrepancias,
       payload: sfn.TaskInput.fromObject({
         orderNo: sfn.JsonPath.stringAt('$.orderNo'),
@@ -432,32 +470,33 @@ export class MsGirosConciliacionStack extends cdk.Stack {
       resultPath: sfn.JsonPath.DISCARD
     });
 
-    const mapProcesarItems = new sfn.Map(this, 'ProcesarCadaOrderNo', {
+    const mapAuto = new sfn.Map(this, 'ProcesarCadaOrderNoAutomatico', {
       itemsPath: '$.dynamoItems',
       resultPath: sfn.JsonPath.DISCARD,
       maxConcurrency: 3
     });
-    mapProcesarItems.iterator(
-      consultarSybase.next(compararYRegistrar)
+    mapAuto.iterator(
+      consultarSybaseAuto.next(compararYRegistrarAuto)
     );
 
-    // === 5. Bifurcación entre modo manual o automático (después de DynamoDB) ===
-    const flujoDespuesDeConsulta = new sfn.Choice(this, '¿Es Modo Manual?')
-      .when(
-        sfn.Condition.isPresent('$.orderNo'),
-        prepararArregloManual.next(mapProcesarItems).next(fin)
-      )
-      .otherwise(
-        prepararItemsMap.next(mapProcesarItems).next(fin)
-      );
+    const flujoAutomatico = taskConsultarDynamoAuto
+      .next(prepararItemsMap)
+      .next(mapAuto)
+      .next(fin);
 
-    // === 6. Flujo principal ===
-    const flujoPrincipal = consultarDynamoTask.next(flujoDespuesDeConsulta);
+    // ------------------------------------
+    // 3. DECISIÓN FINAL (Choice inicial)
+    // ------------------------------------
+    const esModoManual = new sfn.Choice(this, '¿Manual o Automatico?')
+      .when(sfn.Condition.isPresent('$.orderNo'), flujoManual)
+      .otherwise(flujoAutomatico);
 
-    // === 7. Crear la máquina de estado ===
+    // ------------------------------------
+    // 4. Crear la máquina
+    // ------------------------------------
     new sfn.StateMachine(this, 'StateMachineConciliacion', {
       stateMachineName: `${this.stackName}-sfn-conciliacion`,
-      definition: flujoPrincipal,
+      definition: esModoManual,
       logs: {
         destination: logGroup,
         level: sfn.LogLevel.ALL,
@@ -465,6 +504,8 @@ export class MsGirosConciliacionStack extends cdk.Stack {
       tracingEnabled: true,
       role: roleStepFunction,
     });
+
+
 
 
     /*
