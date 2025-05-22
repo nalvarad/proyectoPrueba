@@ -88,7 +88,7 @@ export const getOnlinePayments = async (event: any = {}) => {
         }
       });
       finalList.sort((a, b) => new Date(a.fecha).getTime() - new Date(b.fecha).getTime());
-      return finalList//.slice(0, 10); // Limitar si se desea
+      return finalList.slice(0, 10); // Limitar si se desea
     }
   } catch (error) {
     console.error('Error al consultar DynamoDB:', error);
