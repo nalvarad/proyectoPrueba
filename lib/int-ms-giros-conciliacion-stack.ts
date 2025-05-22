@@ -276,6 +276,7 @@ export class MsGirosConciliacionStack extends cdk.Stack {
       runtime: lambda.Runtime.NODEJS_16_X,
       environment: {
         TABLA_DATA_NAME: tableOnlinePayment.tableName,
+        FECHA: config.FECHA,
       },
       memorySize: 512,
       timeout: cdk.Duration.seconds(15),
@@ -370,13 +371,15 @@ export class MsGirosConciliacionStack extends cdk.Stack {
 
     // ======== EventBridge Rule Dispara cada cierto tiempo la Retry Lambda Periodically ========
     const reglaReintentos = new events.Rule(this, 'ReglaReintentoDiscrepancias', {
-      schedule: events.Schedule.rate(Duration.minutes(1)),
-      description: 'Regla que ejecuta la Lambda de reintento de discrepancias cada 1 minuto',
+      schedule: events.Schedule.cron({
+        minute: '*',           // Cada minuto
+        hour: '13-22',         // UTC → equivale a 08:00-17:00 Ecuador
+        weekDay: 'MON-FRI',    // Solo de lunes a viernes
+      }),
+      description: 'Ejecuta la Lambda de reintentos cada minuto durante horario laboral (L-V, 08:00 a 17:00)',
     });
 
-    // Vincular la regla a la Lambda como destino
     reglaReintentos.addTarget(new targets.LambdaFunction(fnRetryDiscrepancias));
-
 
     // ================ Step Functions ================
 

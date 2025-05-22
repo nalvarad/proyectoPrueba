@@ -5,7 +5,6 @@ export class BuildConfig {
 
     private nameStackApplication: string
     private stage: string ;
-    private env: any;
 
     constructor(nameStackApplication?: string, stage?: string) {
         this.nameStackApplication = nameStackApplication ?? process.env.STACK_NAME ?? '';
@@ -70,6 +69,7 @@ export class BuildConfig {
                 TIME_REINTENTOS: this.ensureString(unparsedEnv, "TIME_REINTENTOS"),
                 NUM_REINTENTOS: this.ensureString(unparsedEnv, "NUM_REINTENTOS"),
                 SM_ARN: this.ensureString(unparsedEnv, "SM_ARN"),
+                FECHA: this.ensureString(unparsedEnv, "FECHA"),
 
             }
             console.log(`### buildConfig OK ${buildConfigResponse}`);
